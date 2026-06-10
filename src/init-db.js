@@ -88,6 +88,16 @@ CREATE TABLE IF NOT EXISTS sentimiento_mensual (
   creado_en   TIMESTAMPTZ DEFAULT now(),
   UNIQUE(entidad_id, anio, mes)
 );
+-- Actores monitoreados: medios, políticos, empresarios
+CREATE TABLE IF NOT EXISTS actores (
+  id            SERIAL PRIMARY KEY,
+  nombre        TEXT NOT NULL,
+  tipo          TEXT DEFAULT 'medio',           -- 'medio' | 'politico' | 'empresario'
+  postura       TEXT DEFAULT 'neutral',          -- 'favor' | 'contra' | 'neutral'
+  redes         TEXT,                             -- handles / links de redes
+  notas         TEXT,                             -- observaciones del usuario
+  creado_en     TIMESTAMPTZ DEFAULT now()
+);
 `;
 
 const USUARIOS = [

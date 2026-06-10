@@ -238,6 +238,53 @@ app.delete('/api/sentimiento-mensual/:id', requiereLogin, requierePermiso('decis
   res.json({ ok: true });
 });
 
+// ─────────────── ACTORES (medios, políticos, empresarios) ───────────────
+app.get('/api/actores', requiereLogin, async (req, res) => {
+  const { rows } = await query('SELECT * FROM actores ORDER BY creado_en DESC');
+  res.json(rows);
+});
+
+app.post('/api/actores', requiereLogin, requierePermiso('amenazas'), async (req, res) => {
+  const { nombre, tipo, postura, redes, notas } = req.body || {};
+  if (!nombre) return res.status(400).json({ error: 'Falta el nombre del actor.' });
+  const tiposOk = ['medio', 'politico', 'empresario'];
+  const posturasOk = ['favor', 'contra', 'neutral'];
+  const t = tiposOk.includes(tipo) ? tipo : 'medio';
+  const p = posturasOk.includes(postura) ? postura : 'neutral';
+  const { rows } = await query(
+    `INSERT INTO actores (nombre, tipo, postura, redes, notas) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+    [nombre.trim(), t, p, redes || '', notas || '']
+  );
+  await auditar('[ACTOR]', `${req.usuario.usuario} agregó ${t} ${nombre}`, req.usuario.usuario);
+  res.status(201).json(rows[0]);
+});
+
+app.patch('/api/actores/:id', requiereLogin, requierePermiso('amenazas'), async (req, res) => {
+  const { rows } = await query('SELECT * FROM actores WHERE id = $1', [req.params.id]);
+  const a = rows[0];
+  if (!a) return res.status(404).json({ error: 'Actor no encontrado.' });
+  const nombre = (req.body.nombre ?? a.nombre).trim() || a.nombre;
+  const tipo = ['medio','politico','empresario'].includes(req.body.tipo) ? req.body.tipo : a.tipo;
+  const postura = ['favor','contra','neutral'].includes(req.body.postura) ? req.body.postura : a.postura;
+  const redes = req.body.redes ?? a.redes;
+  const notas = req.body.notas ?? a.notas;
+  const upd = await query(
+    `UPDATE actores SET nombre=$1, tipo=$2, postura=$3, redes=$4, notas=$5 WHERE id=$6 RETURNING *`,
+    [nombre, tipo, postura, redes, notas, req.params.id]
+  );
+  await auditar('[ACTOR]', `${req.usuario.usuario} editó ${nombre}`, req.usuario.usuario);
+  res.json(upd.rows[0]);
+});
+
+app.delete('/api/actores/:id', requiereLogin, requierePermiso('amenazas'), async (req, res) => {
+  const { rows } = await query('SELECT * FROM actores WHERE id = $1', [req.params.id]);
+  const a = rows[0];
+  if (!a) return res.status(404).json({ error: 'Actor no encontrado.' });
+  await query('DELETE FROM actores WHERE id = $1', [req.params.id]);
+  await auditar('[ACTOR]', `${req.usuario.usuario} eliminó ${a.nombre}`, req.usuario.usuario);
+  res.json({ ok: true });
+});
+
 // ─────────────── CARGA DE DATOS (.xlsx de ExportComments) ───────────────
 // Subir un archivo. Requiere permiso de analista o superior (usamos 'decisiones').
 app.post('/api/cargar', requiereLogin, requierePermiso('decisiones'), subida.single('archivo'), async (req, res) => {
