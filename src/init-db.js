@@ -76,6 +76,18 @@ CREATE TABLE IF NOT EXISTS menciones (
 CREATE INDEX IF NOT EXISTS idx_menciones_carga ON menciones(carga_id);
 CREATE INDEX IF NOT EXISTS idx_menciones_sent ON menciones(sentimiento);
 CREATE INDEX IF NOT EXISTS idx_menciones_dudoso ON menciones(revisado) WHERE confianza < 0.6;
+-- Sentimiento mensual histórico por entidad (ingresado a mano)
+CREATE TABLE IF NOT EXISTS sentimiento_mensual (
+  id          SERIAL PRIMARY KEY,
+  entidad_id  INTEGER REFERENCES entidades(id) ON DELETE CASCADE,
+  anio        INTEGER NOT NULL,
+  mes         INTEGER NOT NULL,
+  positivo    INTEGER DEFAULT 0,
+  negativo    INTEGER DEFAULT 0,
+  neutro      INTEGER DEFAULT 0,
+  creado_en   TIMESTAMPTZ DEFAULT now(),
+  UNIQUE(entidad_id, anio, mes)
+);
 `;
 
 const USUARIOS = [

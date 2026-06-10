@@ -89,6 +89,33 @@ app.delete('/api/usuarios/:id', requiereLogin, requierePermiso('config'), async 
   } catch (e) { console.error(e); res.status(500).json({ error: 'Error al eliminar.' }); }
 });
 
+// Editar usuario: nombre, rol, permisos, y opcionalmente contraseña
+app.patch('/api/usuarios/:id', requiereLogin, requierePermiso('config'), async (req, res) => {
+  try {
+    const { rows } = await query('SELECT * FROM usuarios WHERE id = $1', [req.params.id]);
+    const u = rows[0];
+    if (!u) return res.status(404).json({ error: 'Usuario no encontrado.' });
+    const nombre = (req.body.nombre ?? u.nombre).trim() || u.nombre;
+    const rol = req.body.rol ?? u.rol;
+    const permisos = Array.isArray(req.body.permisos) ? req.body.permisos : u.permisos;
+    const avatar = nombre.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase();
+    // Si mandan una contraseña nueva (no vacía), la actualiza cifrada
+    if (req.body.pass && req.body.pass.length >= 5) {
+      const hash = await bcrypt.hash(req.body.pass, 10);
+      await query('UPDATE usuarios SET pass_hash=$1 WHERE id=$2', [hash, req.params.id]);
+    } else if (req.body.pass && req.body.pass.length > 0) {
+      return res.status(400).json({ error: 'La contraseña debe tener al menos 5 caracteres.' });
+    }
+    const upd = await query(
+      `UPDATE usuarios SET nombre=$1, rol=$2, permisos=$3, avatar=$4 WHERE id=$5
+       RETURNING id, nombre, usuario, email, avatar, rol, permisos`,
+      [nombre, rol, permisos, avatar, req.params.id]
+    );
+    await auditar('[USER]', `${req.usuario.usuario} editó usuario ${nombre}`, req.usuario.usuario);
+    res.json(upd.rows[0]);
+  } catch (e) { console.error(e); res.status(500).json({ error: 'Error al editar usuario.' }); }
+});
+
 // ─────────────── ENTIDADES ───────────────
 app.get('/api/entidades', requiereLogin, async (req, res) => {
   const { rows } = await query('SELECT * FROM entidades ORDER BY creado_en');
@@ -115,6 +142,24 @@ app.delete('/api/entidades/:id', requiereLogin, requierePermiso('config'), async
   await query('DELETE FROM entidades WHERE id = $1', [req.params.id]);
   await auditar('[ENTITY]', `${req.usuario.usuario} eliminó entidad ${e.nombre}${e.es_base ? ' (BASE)' : ''}`, req.usuario.usuario);
   res.json({ ok: true });
+});
+
+// Editar una entidad existente
+app.patch('/api/entidades/:id', requiereLogin, requierePermiso('config'), async (req, res) => {
+  const { rows } = await query('SELECT * FROM entidades WHERE id = $1', [req.params.id]);
+  const e = rows[0];
+  if (!e) return res.status(404).json({ error: 'Entidad no encontrada.' });
+  const nombre = (req.body.nombre ?? e.nombre).trim() || e.nombre;
+  const tipo = req.body.tipo ?? e.tipo;
+  const handles = req.body.handles ?? e.handles;
+  const keywords = req.body.keywords ?? e.keywords;
+  const icono = nombre.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase();
+  const upd = await query(
+    `UPDATE entidades SET nombre=$1, tipo=$2, handles=$3, keywords=$4, icono=$5 WHERE id=$6 RETURNING *`,
+    [nombre, tipo, handles, keywords, icono, req.params.id]
+  );
+  await auditar('[ENTITY]', `${req.usuario.usuario} editó entidad ${nombre}`, req.usuario.usuario);
+  res.json(upd.rows[0]);
 });
 
 // ─────────────── PROYECTOS ───────────────
@@ -149,6 +194,47 @@ app.delete('/api/proyectos/:id', requiereLogin, requierePermiso('proyectos'), as
   if (!p) return res.status(404).json({ error: 'Proyecto no encontrado.' });
   await query('DELETE FROM proyectos WHERE id = $1', [req.params.id]);
   await auditar('[PROJECT]', `${req.usuario.usuario} eliminó proyecto ${p.nombre}`, req.usuario.usuario);
+  res.json({ ok: true });
+});
+
+// ─────────────── SENTIMIENTO MENSUAL (histórico por entidad) ───────────────
+// Trae todo el histórico, agrupado por entidad
+app.get('/api/sentimiento-mensual', requiereLogin, async (req, res) => {
+  const { rows } = await query(
+    `SELECT sm.*, e.nombre AS entidad_nombre, e.icono AS entidad_icono
+     FROM sentimiento_mensual sm
+     JOIN entidades e ON e.id = sm.entidad_id
+     ORDER BY sm.anio, sm.mes`
+  );
+  res.json(rows);
+});
+
+// Guardar (o actualizar) un mes para una entidad
+app.post('/api/sentimiento-mensual', requiereLogin, requierePermiso('decisiones'), async (req, res) => {
+  let { entidad_id, anio, mes, positivo, negativo, neutro } = req.body || {};
+  entidad_id = parseInt(entidad_id); anio = parseInt(anio); mes = parseInt(mes);
+  positivo = parseInt(positivo); negativo = parseInt(negativo); neutro = parseInt(neutro);
+  if (!entidad_id || !anio || !mes) return res.status(400).json({ error: 'Faltan entidad, año o mes.' });
+  if (mes < 1 || mes > 12) return res.status(400).json({ error: 'Mes inválido (1-12).' });
+  [positivo, negativo, neutro] = [positivo, negativo, neutro].map(v => isNaN(v) ? 0 : Math.max(0, Math.min(100, v)));
+  try {
+    // UPSERT: si ya existe ese mes/entidad, lo actualiza
+    const { rows } = await query(
+      `INSERT INTO sentimiento_mensual (entidad_id, anio, mes, positivo, negativo, neutro)
+       VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT (entidad_id, anio, mes)
+       DO UPDATE SET positivo=$4, negativo=$5, neutro=$6
+       RETURNING *`,
+      [entidad_id, anio, mes, positivo, negativo, neutro]
+    );
+    await auditar('[SENTIMIENTO]', `${req.usuario.usuario} registró sentimiento ${mes}/${anio}`, req.usuario.usuario);
+    res.status(201).json(rows[0]);
+  } catch (e) { console.error(e); res.status(500).json({ error: 'Error al guardar.' }); }
+});
+
+// Eliminar un registro mensual
+app.delete('/api/sentimiento-mensual/:id', requiereLogin, requierePermiso('decisiones'), async (req, res) => {
+  await query('DELETE FROM sentimiento_mensual WHERE id = $1', [req.params.id]);
   res.json({ ok: true });
 });
 
