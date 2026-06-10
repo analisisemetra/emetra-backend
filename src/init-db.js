@@ -98,6 +98,39 @@ CREATE TABLE IF NOT EXISTS actores (
   notas         TEXT,                             -- observaciones del usuario
   creado_en     TIMESTAMPTZ DEFAULT now()
 );
+-- Publicaciones con sus métricas (de la plantilla de Excel)
+CREATE TABLE IF NOT EXISTS publicaciones (
+  id            SERIAL PRIMARY KEY,
+  fecha         DATE,
+  red           TEXT,
+  tema          TEXT,
+  texto         TEXT,
+  alcance       BIGINT DEFAULT 0,
+  plays         BIGINT DEFAULT 0,
+  likes         BIGINT DEFAULT 0,
+  comentarios   BIGINT DEFAULT 0,
+  compartidos   BIGINT DEFAULT 0,
+  creado_en     TIMESTAMPTZ DEFAULT now()
+);
+-- Credibilidad por entidad (de la plantilla)
+CREATE TABLE IF NOT EXISTS credibilidad (
+  id            SERIAL PRIMARY KEY,
+  entidad       TEXT UNIQUE NOT NULL,
+  puntaje       INTEGER DEFAULT 0,
+  respuesta     INTEGER DEFAULT 0,
+  transparencia INTEGER DEFAULT 0,
+  consistencia  INTEGER DEFAULT 0,
+  cercania      INTEGER DEFAULT 0,
+  creado_en     TIMESTAMPTZ DEFAULT now()
+);
+-- Zonas críticas (de la plantilla)
+CREATE TABLE IF NOT EXISTS zonas (
+  id            SERIAL PRIMARY KEY,
+  zona          TEXT UNIQUE NOT NULL,
+  menciones     INTEGER DEFAULT 0,
+  nota          TEXT,
+  creado_en     TIMESTAMPTZ DEFAULT now()
+);
 `;
 
 const USUARIOS = [
