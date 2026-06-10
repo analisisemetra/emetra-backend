@@ -10,6 +10,7 @@ import { firmarToken, requiereLogin, requierePermiso } from './auth.js';
 import { inicializarBase } from './init-db.js';
 import { procesarXlsx } from './procesar-xlsx.js';
 import { procesarMetricas } from './procesar-metricas.js';
+import { leerTodasLasAlertas } from './leer-alertas.js';
 
 // Recibe archivos en memoria (hasta 10 MB), sin guardarlos en disco.
 const subida = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -377,6 +378,78 @@ app.get('/api/zonas', requiereLogin, async (req, res) => {
   res.json(rows);
 });
 
+// Datos para la pestaña ESTADÍSTICAS (todas las gráficas)
+app.get('/api/estadisticas', requiereLogin, async (req, res) => {
+  // Alcance vs recepción por tema (de publicaciones + sentimiento de comentarios por tema si hubiera)
+  const porTema = await query(`SELECT tema, COUNT(*)::int AS posts, COALESCE(SUM(alcance),0)::bigint AS alcance, COALESCE(SUM(likes+comentarios+compartidos),0)::bigint AS interacciones FROM publicaciones WHERE tema <> '' GROUP BY tema ORDER BY alcance DESC`);
+  const crisis = await query(`SELECT fecha, menciones FROM crisis_diaria ORDER BY fecha`);
+  const engagement = await query(`SELECT canal, er FROM engagement_canal ORDER BY er DESC`);
+  const porRed = await query(`SELECT red, COALESCE(SUM(plays),0)::bigint AS plays FROM publicaciones WHERE red <> '' GROUP BY red ORDER BY plays DESC`);
+  // sentimiento por tema (de los comentarios clasificados, si los hay)
+  const sentTema = await query(`SELECT tema, COUNT(*)::int AS posts FROM publicaciones WHERE tema <> '' GROUP BY tema`);
+  res.json({
+    porTema: porTema.rows.map(r => ({ tema: r.tema, posts: r.posts, alcance: Number(r.alcance), interacciones: Number(r.interacciones) })),
+    crisis: crisis.rows.map(r => ({ fecha: r.fecha, menciones: r.menciones })),
+    engagement: engagement.rows.map(r => ({ canal: r.canal, er: Number(r.er) })),
+    porRed: porRed.rows.map(r => ({ red: r.red, plays: Number(r.plays) })),
+    sentTema: sentTema.rows,
+  });
+});
+
+// Denuncias ciudadanas (para Territorio)
+app.get('/api/denuncias', requiereLogin, async (req, res) => {
+  const { rows } = await query('SELECT * FROM denuncias ORDER BY fecha DESC NULLS LAST');
+  res.json(rows);
+});
+
+// Proyectos con métricas (de la plantilla)
+app.get('/api/proyectos-metricas', requiereLogin, async (req, res) => {
+  const { rows } = await query('SELECT * FROM proyectos_metricas ORDER BY aceptacion DESC');
+  res.json(rows);
+});
+
+// ─────────────── ALERTAS (menciones vía Google Alerts RSS) ───────────────
+// Listar las fuentes RSS registradas
+app.get('/api/fuentes', requiereLogin, async (req, res) => {
+  const { rows } = await query('SELECT * FROM fuentes_rss ORDER BY creado_en');
+  res.json(rows);
+});
+// Agregar una fuente RSS
+app.post('/api/fuentes', requiereLogin, requierePermiso('config'), async (req, res) => {
+  const { nombre, url } = req.body || {};
+  if (!nombre || !url) return res.status(400).json({ error: 'Falta nombre o URL.' });
+  if (!/^https?:\/\//i.test(url)) return res.status(400).json({ error: 'La URL debe empezar con http(s)://' });
+  const { rows } = await query('INSERT INTO fuentes_rss (nombre, url) VALUES ($1,$2) RETURNING *', [nombre.trim(), url.trim()]);
+  await auditar('[ALERTA]', `${req.usuario.usuario} agregó fuente ${nombre}`, req.usuario.usuario);
+  res.status(201).json(rows[0]);
+});
+// Eliminar una fuente
+app.delete('/api/fuentes/:id', requiereLogin, requierePermiso('config'), async (req, res) => {
+  await query('DELETE FROM fuentes_rss WHERE id = $1', [req.params.id]);
+  res.json({ ok: true });
+});
+// Refrescar: lee todos los feeds ahora mismo
+app.post('/api/alertas/refrescar', requiereLogin, async (req, res) => {
+  try {
+    const r = await leerTodasLasAlertas();
+    res.json(r);
+  } catch (e) { console.error(e); res.status(500).json({ error: 'Error al leer alertas.' }); }
+});
+// Listar menciones detectadas (más recientes primero)
+app.get('/api/alertas', requiereLogin, async (req, res) => {
+  const { rows } = await query('SELECT * FROM menciones_alertas ORDER BY publicado DESC NULLS LAST, creado_en DESC LIMIT 100');
+  res.json(rows);
+});
+// Cuántas no leídas
+app.get('/api/alertas/nuevas', requiereLogin, async (req, res) => {
+  const { rows } = await query('SELECT COUNT(*)::int AS n FROM menciones_alertas WHERE leida = false');
+  res.json({ nuevas: rows[0].n });
+});
+// Marcar todas como leídas
+app.post('/api/alertas/marcar-leidas', requiereLogin, async (req, res) => {
+  await query('UPDATE menciones_alertas SET leida = true WHERE leida = false');
+  res.json({ ok: true });
+});
 
 
 // Lista de comentarios dudosos (para que una persona los ajuste)
@@ -418,6 +491,13 @@ inicializarBase()
       console.log(`✓ EMETRA SENTINELA backend corriendo en el puerto ${PORT}`);
       console.log(`  Prueba de salud: /api/health`);
     });
+    // Revisión automática de alertas cada hora (si el backend está despierto)
+    setInterval(async () => {
+      try {
+        const r = await leerTodasLasAlertas();
+        if (r.nuevas > 0) console.log(`[ALERTAS] ${r.nuevas} menciones nuevas de ${r.fuentes} fuentes`);
+      } catch (e) { console.error('[ALERTAS] Error en revisión automática:', e.message); }
+    }, 60 * 60 * 1000); // cada 60 minutos
   })
   .catch((e) => {
     console.error('✗ No se pudo inicializar la base de datos:', e);

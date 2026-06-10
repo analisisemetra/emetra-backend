@@ -131,6 +131,59 @@ CREATE TABLE IF NOT EXISTS zonas (
   nota          TEXT,
   creado_en     TIMESTAMPTZ DEFAULT now()
 );
+-- Crisis diaria (menciones por día) para el radar
+CREATE TABLE IF NOT EXISTS crisis_diaria (
+  id            SERIAL PRIMARY KEY,
+  fecha         DATE UNIQUE,
+  menciones     INTEGER DEFAULT 0
+);
+-- Engagement rate por canal
+CREATE TABLE IF NOT EXISTS engagement_canal (
+  id            SERIAL PRIMARY KEY,
+  canal         TEXT UNIQUE NOT NULL,
+  er            NUMERIC DEFAULT 0
+);
+-- Denuncias ciudadanas concretas
+CREATE TABLE IF NOT EXISTS denuncias (
+  id            SERIAL PRIMARY KEY,
+  fecha         DATE,
+  zona          TEXT,
+  tipo          TEXT,
+  descripcion   TEXT,
+  estado        TEXT DEFAULT 'Pendiente',
+  creado_en     TIMESTAMPTZ DEFAULT now()
+);
+-- Proyectos con métricas (de la plantilla; complementa la tabla proyectos existente)
+CREATE TABLE IF NOT EXISTS proyectos_metricas (
+  id            SERIAL PRIMARY KEY,
+  proyecto      TEXT UNIQUE NOT NULL,
+  aceptacion    INTEGER DEFAULT 0,
+  menciones     INTEGER DEFAULT 0,
+  positivo      INTEGER DEFAULT 0,
+  negativo      INTEGER DEFAULT 0,
+  tendencia     INTEGER DEFAULT 0
+);
+-- Fuentes RSS (Google Alerts) que el usuario registra
+CREATE TABLE IF NOT EXISTS fuentes_rss (
+  id            SERIAL PRIMARY KEY,
+  nombre        TEXT NOT NULL,
+  url           TEXT NOT NULL,
+  activa        BOOLEAN DEFAULT true,
+  creado_en     TIMESTAMPTZ DEFAULT now()
+);
+-- Menciones detectadas de los feeds (las alertas)
+CREATE TABLE IF NOT EXISTS menciones_alertas (
+  id            SERIAL PRIMARY KEY,
+  fuente_id     INTEGER REFERENCES fuentes_rss(id) ON DELETE CASCADE,
+  fuente_nombre TEXT,
+  titulo        TEXT,
+  enlace        TEXT,
+  resumen       TEXT,
+  publicado     TIMESTAMPTZ,
+  guid          TEXT UNIQUE,          -- identificador único para no duplicar
+  leida         BOOLEAN DEFAULT false,
+  creado_en     TIMESTAMPTZ DEFAULT now()
+);
 `;
 
 const USUARIOS = [

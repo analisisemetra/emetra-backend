@@ -86,5 +86,82 @@ export async function procesarMetricas(buffer) {
     }
   }
 
+  // ── HOJA DENUNCIAS ──
+  const hDen = buscarHoja(wb, 'Denuncias');
+  if (hDen) {
+    const filas = XLSX.utils.sheet_to_json(hDen, { defval: '' });
+    await pool.query('DELETE FROM denuncias');
+    for (const f of filas) {
+      const desc = String(f['Descripción'] ?? f['Descripcion'] ?? '').trim();
+      if (!desc || desc.startsWith('↑')) continue;
+      let fecha = null;
+      const fv = f['Fecha'];
+      if (fv instanceof Date && !isNaN(fv)) fecha = fv.toISOString().slice(0,10);
+      else if (fv) { const d = new Date(fv); if (!isNaN(d)) fecha = d.toISOString().slice(0,10); }
+      await pool.query(
+        `INSERT INTO denuncias (fecha, zona, tipo, descripcion, estado) VALUES ($1,$2,$3,$4,$5)`,
+        [fecha, String(f['Zona']??'').trim(), String(f['Tipo']??'').trim(), desc, String(f['Estado']??'Pendiente').trim()]
+      );
+      resumen.denuncias = (resumen.denuncias||0) + 1;
+    }
+  }
+
+  // ── HOJA PROYECTOS ──
+  const hPro = buscarHoja(wb, 'Proyectos');
+  if (hPro) {
+    const filas = XLSX.utils.sheet_to_json(hPro, { defval: '' });
+    await pool.query('DELETE FROM proyectos_metricas');
+    for (const f of filas) {
+      const proyecto = String(f['Proyecto'] ?? '').trim();
+      if (!proyecto || proyecto.startsWith('↑')) continue;
+      await pool.query(
+        `INSERT INTO proyectos_metricas (proyecto, aceptacion, menciones, positivo, negativo, tendencia)
+         VALUES ($1,$2,$3,$4,$5,$6)
+         ON CONFLICT (proyecto) DO UPDATE SET aceptacion=$2, menciones=$3, positivo=$4, negativo=$5, tendencia=$6`,
+        [proyecto, num(f['Aceptación (%)']??f['Aceptación']), num(f['Menciones']),
+         num(f['% Positivo']), num(f['% Negativo']), num(f['Tendencia (pts 6 meses)']??f['Tendencia'])]
+      );
+      resumen.proyectos = (resumen.proyectos||0) + 1;
+    }
+  }
+
+  // ── HOJA CRISIS DIARIA ──
+  const hCri = buscarHoja(wb, 'Crisis Diaria');
+  if (hCri) {
+    const filas = XLSX.utils.sheet_to_json(hCri, { defval: '' });
+    await pool.query('DELETE FROM crisis_diaria');
+    for (const f of filas) {
+      const fv = f['Fecha'];
+      let fecha = null;
+      if (fv instanceof Date && !isNaN(fv)) fecha = fv.toISOString().slice(0,10);
+      else if (fv) { const d = new Date(fv); if (!isNaN(d)) fecha = d.toISOString().slice(0,10); }
+      if (!fecha) continue;
+      await pool.query(
+        `INSERT INTO crisis_diaria (fecha, menciones) VALUES ($1,$2)
+         ON CONFLICT (fecha) DO UPDATE SET menciones=$2`,
+        [fecha, num(f['Menciones ese día']??f['Menciones'])]
+      );
+      resumen.crisis = (resumen.crisis||0) + 1;
+    }
+  }
+
+  // ── HOJA ENGAGEMENT CANAL ──
+  const hEng = buscarHoja(wb, 'Engagement Canal');
+  if (hEng) {
+    const filas = XLSX.utils.sheet_to_json(hEng, { defval: '' });
+    await pool.query('DELETE FROM engagement_canal');
+    for (const f of filas) {
+      const canal = String(f['Canal'] ?? '').trim();
+      if (!canal || canal.startsWith('↑')) continue;
+      const er = parseFloat(String(f['Engagement Rate (%)']??f['Engagement Rate']??0).replace(/[^\d.]/g,'')) || 0;
+      await pool.query(
+        `INSERT INTO engagement_canal (canal, er) VALUES ($1,$2)
+         ON CONFLICT (canal) DO UPDATE SET er=$2`,
+        [canal, er]
+      );
+      resumen.engagement = (resumen.engagement||0) + 1;
+    }
+  }
+
   return resumen;
 }
