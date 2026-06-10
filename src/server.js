@@ -9,6 +9,7 @@ import { pool, query } from './db.js';
 import { firmarToken, requiereLogin, requierePermiso } from './auth.js';
 import { inicializarBase } from './init-db.js';
 import { procesarXlsx } from './procesar-xlsx.js';
+import { procesarMetricas } from './procesar-metricas.js';
 
 // Recibe archivos en memoria (hasta 10 MB), sin guardarlos en disco.
 const subida = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -321,6 +322,62 @@ app.get('/api/resumen', requiereLogin, async (req, res) => {
     porRevisar: dudosos.rows[0].n,
   });
 });
+
+// ─────────────── MÉTRICAS (plantilla de Excel) ───────────────
+// Subir la plantilla de métricas
+app.post('/api/metricas', requiereLogin, requierePermiso('decisiones'), subida.single('archivo'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No se recibió ningún archivo.' });
+  try {
+    const resumen = await procesarMetricas(req.file.buffer);
+    await auditar('[METRICAS]', `${req.usuario.usuario} subió métricas: ${resumen.publicaciones} pubs, ${resumen.credibilidad} cred, ${resumen.zonas} zonas`, req.usuario.usuario);
+    res.json(resumen);
+  } catch (e) {
+    console.error(e);
+    res.status(400).json({ error: e.message || 'No se pudo procesar la plantilla.' });
+  }
+});
+
+// Datos para PANORAMA: combina comentarios (sentimiento) + publicaciones (alcance)
+app.get('/api/panorama', requiereLogin, async (req, res) => {
+  const sent = await query(`SELECT sentimiento, COUNT(*)::int AS n FROM menciones GROUP BY sentimiento`);
+  const totalCom = await query(`SELECT COUNT(*)::int AS n FROM menciones`);
+  const pubs = await query(`SELECT COUNT(*)::int AS posts, COALESCE(SUM(alcance),0)::bigint AS alcance, COALESCE(SUM(plays),0)::bigint AS plays, COALESCE(SUM(likes+comentarios+compartidos),0)::bigint AS interacciones FROM publicaciones`);
+  const porTema = await query(`SELECT tema, COUNT(*)::int AS posts, COALESCE(SUM(alcance),0)::bigint AS alcance FROM publicaciones WHERE tema <> '' GROUP BY tema ORDER BY alcance DESC`);
+  const porRed = await query(`SELECT red, COUNT(*)::int AS posts, COALESCE(SUM(plays),0)::bigint AS plays FROM publicaciones WHERE red <> '' GROUP BY red`);
+  // sentimiento en porcentajes
+  const s = { positivo: 0, negativo: 0, neutro: 0 };
+  sent.rows.forEach(r => { s[r.sentimiento] = r.n; });
+  const tot = s.positivo + s.negativo + s.neutro || 1;
+  res.json({
+    totalComentarios: totalCom.rows[0].n,
+    totalPosts: pubs.rows[0].posts,
+    alcanceTotal: Number(pubs.rows[0].alcance),
+    playsTotal: Number(pubs.rows[0].plays),
+    interaccionesTotal: Number(pubs.rows[0].interacciones),
+    sentimiento: {
+      positivo: Math.round(s.positivo / tot * 100),
+      negativo: Math.round(s.negativo / tot * 100),
+      neutro: Math.round(s.neutro / tot * 100),
+      conteo: s,
+    },
+    porTema: porTema.rows.map(r => ({ tema: r.tema, posts: r.posts, alcance: Number(r.alcance) })),
+    porRed: porRed.rows.map(r => ({ red: r.red, posts: r.posts, plays: Number(r.plays) })),
+  });
+});
+
+// Datos de CREDIBILIDAD
+app.get('/api/credibilidad', requiereLogin, async (req, res) => {
+  const { rows } = await query('SELECT * FROM credibilidad ORDER BY puntaje DESC');
+  res.json(rows);
+});
+
+// Datos de ZONAS (de la plantilla, no de comentarios)
+app.get('/api/zonas', requiereLogin, async (req, res) => {
+  const { rows } = await query('SELECT * FROM zonas ORDER BY menciones DESC');
+  res.json(rows);
+});
+
+
 
 // Lista de comentarios dudosos (para que una persona los ajuste)
 app.get('/api/dudosos', requiereLogin, requierePermiso('decisiones'), async (req, res) => {
