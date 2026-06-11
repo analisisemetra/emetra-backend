@@ -288,6 +288,42 @@ app.delete('/api/actores/:id', requiereLogin, requierePermiso('amenazas'), async
   res.json({ ok: true });
 });
 
+// ─────────────── NOTICIAS (alimentan el mapa de poder) ───────────────
+// Listar noticias capturadas
+app.get('/api/noticias', requiereLogin, async (req, res) => {
+  const { rows } = await query('SELECT * FROM noticias ORDER BY creado_en DESC LIMIT 200');
+  res.json(rows);
+});
+// Agregar una noticia → crea o actualiza el actor que la publica
+app.post('/api/noticias', requiereLogin, requierePermiso('amenazas'), async (req, res) => {
+  const { titulo, actor, tipo, postura, enlace } = req.body || {};
+  if (!actor || !titulo) return res.status(400).json({ error: 'Falta el actor o el texto de la noticia.' });
+  const tipoVal = ['medio', 'politico', 'civil', 'ficticio'].includes(tipo) ? tipo : 'medio';
+  const postVal = ['favor', 'contra', 'neutral'].includes(postura) ? postura : 'neutral';
+  // guarda la noticia
+  const { rows } = await query(
+    `INSERT INTO noticias (titulo, actor, tipo, postura, enlace) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+    [titulo.trim(), actor.trim(), tipoVal, postVal, (enlace || '').trim()]
+  );
+  // crea o actualiza el actor (mapeo: civil/ficticio → empresario para la tabla actores)
+  const tipoActor = tipoVal === 'politico' ? 'politico' : (tipoVal === 'medio' ? 'medio' : 'empresario');
+  const existe = await query('SELECT id FROM actores WHERE lower(nombre) = lower($1) LIMIT 1', [actor.trim()]);
+  if (existe.rows.length > 0) {
+    // actualiza su postura a la más reciente
+    await query('UPDATE actores SET postura=$1, tipo=$2 WHERE id=$3', [postVal, tipoActor, existe.rows[0].id]);
+  } else {
+    await query('INSERT INTO actores (nombre, tipo, postura, notas) VALUES ($1,$2,$3,$4)',
+      [actor.trim(), tipoActor, postVal, 'Creado desde captura de noticias']);
+  }
+  await auditar('[NOTICIA]', `${req.usuario.usuario} agregó noticia de ${actor}`, req.usuario.usuario);
+  res.status(201).json(rows[0]);
+});
+// Eliminar una noticia
+app.delete('/api/noticias/:id', requiereLogin, requierePermiso('amenazas'), async (req, res) => {
+  await query('DELETE FROM noticias WHERE id = $1', [req.params.id]);
+  res.json({ ok: true });
+});
+
 // ─────────────── CARGA DE DATOS (.xlsx de ExportComments) ───────────────
 // Subir un archivo. Requiere permiso de analista o superior (usamos 'decisiones').
 app.post('/api/cargar', requiereLogin, requierePermiso('decisiones'), subida.single('archivo'), async (req, res) => {

@@ -116,6 +116,16 @@ CREATE TABLE IF NOT EXISTS actores (
   notas         TEXT,                             -- observaciones del usuario
   creado_en     TIMESTAMPTZ DEFAULT now()
 );
+-- Noticias capturadas (alimentan el mapa de poder de actores)
+CREATE TABLE IF NOT EXISTS noticias (
+  id            SERIAL PRIMARY KEY,
+  titulo        TEXT,                  -- texto / título de la noticia
+  actor         TEXT NOT NULL,         -- medio o actor que la publica
+  tipo          TEXT DEFAULT 'medio',  -- medio | politico | civil | ficticio
+  postura       TEXT DEFAULT 'neutral',-- favor | contra | neutral
+  enlace        TEXT,
+  creado_en     TIMESTAMPTZ DEFAULT now()
+);
 -- Publicaciones con sus métricas (de la plantilla de Excel)
 CREATE TABLE IF NOT EXISTS publicaciones (
   id            SERIAL PRIMARY KEY,
