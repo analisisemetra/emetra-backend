@@ -368,8 +368,52 @@ app.get('/api/panorama', requiereLogin, async (req, res) => {
 
 // Datos de CREDIBILIDAD
 app.get('/api/credibilidad', requiereLogin, async (req, res) => {
-  const { rows } = await query('SELECT * FROM credibilidad ORDER BY puntaje DESC');
+  // Héctor Flores (personaje principal) siempre primero, luego por puntaje
+  const { rows } = await query(`
+    SELECT * FROM credibilidad
+    ORDER BY (CASE WHEN lower(entidad) LIKE '%héctor flores%' OR lower(entidad) LIKE '%hector flores%' THEN 0 ELSE 1 END),
+             puntaje DESC`);
   res.json(rows);
+});
+
+// Ficha del personaje principal (Héctor Flores): su estado resumido para el Pulso
+app.get('/api/ficha-principal', requiereLogin, async (req, res) => {
+  const nombre = 'Héctor Flores';
+  // credibilidad
+  const cred = await query(`SELECT * FROM credibilidad WHERE lower(entidad) LIKE '%héctor flores%' OR lower(entidad) LIKE '%hector flores%' LIMIT 1`);
+  // menciones en comentarios (texto que lo nombra)
+  const menc = await query(`
+    SELECT COUNT(*)::int AS total,
+           SUM(CASE WHEN sentimiento='positivo' THEN 1 ELSE 0 END)::int AS pos,
+           SUM(CASE WHEN sentimiento='negativo' THEN 1 ELSE 0 END)::int AS neg,
+           SUM(CASE WHEN sentimiento='neutro' THEN 1 ELSE 0 END)::int AS neu
+    FROM menciones
+    WHERE lower(texto) LIKE '%héctor flores%' OR lower(texto) LIKE '%hector flores%' OR lower(texto) LIKE '%gerente%emetra%'`);
+  // menciones en medios (alertas)
+  const alertas = await query(`
+    SELECT COUNT(*)::int AS total FROM menciones_alertas
+    WHERE lower(titulo) LIKE '%héctor flores%' OR lower(titulo) LIKE '%hector flores%' OR lower(resumen) LIKE '%héctor flores%' OR lower(resumen) LIKE '%hector flores%'`);
+  // últimas menciones en medios sobre él
+  const ultimas = await query(`
+    SELECT titulo, fuente_nombre, enlace, publicado FROM menciones_alertas
+    WHERE lower(titulo) LIKE '%héctor flores%' OR lower(titulo) LIKE '%hector flores%' OR lower(resumen) LIKE '%héctor flores%' OR lower(resumen) LIKE '%hector flores%'
+    ORDER BY publicado DESC NULLS LAST LIMIT 5`);
+  const m = menc.rows[0];
+  const totalCom = m.total || 0;
+  res.json({
+    nombre,
+    credibilidad: cred.rows[0] || null,
+    menciones: {
+      total: totalCom,
+      positivos: m.pos || 0,
+      negativos: m.neg || 0,
+      neutros: m.neu || 0,
+      pctPos: totalCom ? Math.round((m.pos||0)/totalCom*100) : 0,
+      pctNeg: totalCom ? Math.round((m.neg||0)/totalCom*100) : 0,
+    },
+    menciones_medios: alertas.rows[0].total || 0,
+    ultimas_medios: ultimas.rows,
+  });
 });
 
 // Datos de ZONAS (de la plantilla, no de comentarios)
