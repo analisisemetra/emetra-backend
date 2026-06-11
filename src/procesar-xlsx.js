@@ -4,6 +4,7 @@
 import XLSX from 'xlsx';
 import { pool } from './db.js';
 import { clasificarSentimiento, detectarZona, detectarDolor, UMBRAL_DUDOSO } from './sentimiento.js';
+import { hayApiKey, clasificarConIA } from './clasificador-ia.js';
 
 // Busca la fila que tiene los encabezados reales (Name, Comment, Date...)
 function encontrarEncabezado(filas) {
@@ -98,36 +99,64 @@ export async function procesarXlsx(buffer, { archivo, subidoPor }) {
     return isNaN(n) ? null : n;
   };
 
+  // 1) Recolecta todas las filas válidas
+  const registros = [];
   for (let i = idxEnc + 1; i < filas.length; i++) {
     const fila = filas[i] || [];
     const texto = valor(fila, cols.texto);
     if (!texto) continue;
-
-    const autor = valor(fila, cols.autor);
-    const username = valor(fila, cols.username);
-    const profileId = valor(fila, cols.profileId);
-    const permalink = valor(fila, cols.permalink);
-    const likes = numero(fila, cols.likes) || 0;
     let fecha = null;
     if (cols.fecha !== undefined) {
       const f = new Date(valor(fila, cols.fecha));
       if (!isNaN(f.getTime())) fecha = f.toISOString();
     }
-    // datos forenses (solo X los trae; en otras quedan null)
-    const followers = numero(fila, cols.followers);
-    const bio = valor(fila, cols.bio) || null;
-    const ubicacion = valor(fila, cols.location) || null;
-    const verificado = cols.verified !== undefined ? /^(yes|sí|si|true)$/i.test(valor(fila, cols.verified)) : null;
+    registros.push({
+      texto,
+      autor: valor(fila, cols.autor),
+      username: valor(fila, cols.username),
+      profileId: valor(fila, cols.profileId),
+      permalink: valor(fila, cols.permalink),
+      likes: numero(fila, cols.likes) || 0,
+      fecha,
+      followers: numero(fila, cols.followers),
+      bio: valor(fila, cols.bio) || null,
+      ubicacion: valor(fila, cols.location) || null,
+      verificado: cols.verified !== undefined ? /^(yes|sí|si|true)$/i.test(valor(fila, cols.verified)) : null,
+    });
+  }
 
-    const { sentimiento, confianza } = clasificarSentimiento(texto);
-    const zona = detectarZona(texto);
-    const dolor = detectarDolor(texto);
+  // 2) Clasifica: con IA (Claude) si hay API key; si no, con el clasificador básico
+  const usarIA = hayApiKey();
+  let clasificaciones;
+  if (usarIA && registros.length > 0) {
+    try {
+      clasificaciones = await clasificarConIA(registros.map(r => r.texto));
+    } catch (e) {
+      console.error('Falló la IA, usando clasificador básico:', e.message);
+      clasificaciones = null;
+    }
+  }
+
+  // 3) Inserta cada registro con su clasificación
+  for (let k = 0; k < registros.length; k++) {
+    const r = registros[k];
+    let sentimiento, confianza, dolor;
+    if (clasificaciones && clasificaciones[k]) {
+      sentimiento = clasificaciones[k].sentimiento;
+      confianza = clasificaciones[k].confianza;
+      dolor = clasificaciones[k].dolor || detectarDolor(r.texto);
+    } else {
+      const c = clasificarSentimiento(r.texto);
+      sentimiento = c.sentimiento; confianza = c.confianza;
+      dolor = detectarDolor(r.texto);
+    }
+    const zona = detectarZona(r.texto);
     const esDudoso = confianza < UMBRAL_DUDOSO;
 
     await pool.query(
       `INSERT INTO menciones (carga_id, autor, profile_id, username, red, fecha, likes, texto, permalink, sentimiento, confianza, zona, dolor, followers, bio, ubicacion, verificado)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
-      [cargaId, autor, profileId, username, red, fecha, likes, texto, permalink, sentimiento, confianza, zona, dolor, followers, bio, ubicacion, verificado]
+      [cargaId, r.autor, r.profileId, r.username, red, r.fecha, r.likes, r.texto, r.permalink, sentimiento, confianza, zona, dolor, r.followers, r.bio, r.ubicacion, r.verificado]
     );
 
     total++;
@@ -142,5 +171,5 @@ export async function procesarXlsx(buffer, { archivo, subidoPor }) {
     [total, positivos, negativos, neutros, dudosos, cargaId]
   );
 
-  return { cargaId, archivo, red, total, positivos, negativos, neutros, dudosos };
+  return { cargaId, archivo, red, total, positivos, negativos, neutros, dudosos, motor: usarIA ? 'IA' : 'básico' };
 }
