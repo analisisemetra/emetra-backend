@@ -140,23 +140,27 @@ export async function procesarXlsx(buffer, { archivo, subidoPor }) {
   // 3) Inserta cada registro con su clasificación
   for (let k = 0; k < registros.length; k++) {
     const r = registros[k];
-    let sentimiento, confianza, dolor;
+    let sentimiento, confianza, dolor, zona, direccion = null, senalado = null;
     if (clasificaciones && clasificaciones[k]) {
-      sentimiento = clasificaciones[k].sentimiento;
-      confianza = clasificaciones[k].confianza;
-      dolor = clasificaciones[k].dolor || detectarDolor(r.texto);
+      const cl = clasificaciones[k];
+      sentimiento = cl.sentimiento;
+      confianza = cl.confianza;
+      dolor = cl.dolor || detectarDolor(r.texto);
+      zona = cl.zona || detectarZona(r.texto);
+      direccion = cl.direccion || null;
+      senalado = cl.senalado || null;
     } else {
       const c = clasificarSentimiento(r.texto);
       sentimiento = c.sentimiento; confianza = c.confianza;
       dolor = detectarDolor(r.texto);
+      zona = detectarZona(r.texto);
     }
-    const zona = detectarZona(r.texto);
     const esDudoso = confianza < UMBRAL_DUDOSO;
 
     await pool.query(
-      `INSERT INTO menciones (carga_id, autor, profile_id, username, red, fecha, likes, texto, permalink, sentimiento, confianza, zona, dolor, followers, bio, ubicacion, verificado)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
-      [cargaId, r.autor, r.profileId, r.username, red, r.fecha, r.likes, r.texto, r.permalink, sentimiento, confianza, zona, dolor, r.followers, r.bio, r.ubicacion, r.verificado]
+      `INSERT INTO menciones (carga_id, autor, profile_id, username, red, fecha, likes, texto, permalink, sentimiento, confianza, zona, dolor, followers, bio, ubicacion, verificado, direccion, senalado)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
+      [cargaId, r.autor, r.profileId, r.username, red, r.fecha, r.likes, r.texto, r.permalink, sentimiento, confianza, zona, dolor, r.followers, r.bio, r.ubicacion, r.verificado, direccion, senalado]
     );
 
     total++;

@@ -89,6 +89,8 @@ ALTER TABLE menciones ADD COLUMN IF NOT EXISTS followers INTEGER;
 ALTER TABLE menciones ADD COLUMN IF NOT EXISTS bio TEXT;
 ALTER TABLE menciones ADD COLUMN IF NOT EXISTS ubicacion TEXT;
 ALTER TABLE menciones ADD COLUMN IF NOT EXISTS verificado BOOLEAN;
+ALTER TABLE menciones ADD COLUMN IF NOT EXISTS direccion TEXT;
+ALTER TABLE menciones ADD COLUMN IF NOT EXISTS senalado TEXT;
 CREATE INDEX IF NOT EXISTS idx_menciones_carga ON menciones(carga_id);
 CREATE INDEX IF NOT EXISTS idx_menciones_sent ON menciones(sentimiento);
 CREATE INDEX IF NOT EXISTS idx_menciones_dudoso ON menciones(revisado) WHERE confianza < 0.6;

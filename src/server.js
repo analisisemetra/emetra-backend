@@ -419,8 +419,24 @@ app.get('/api/ficha-principal', requiereLogin, async (req, res) => {
 
 // Datos de ZONAS (de la plantilla, no de comentarios)
 app.get('/api/zonas', requiereLogin, async (req, res) => {
-  const { rows } = await query('SELECT * FROM zonas ORDER BY menciones DESC');
-  res.json(rows);
+  // Zonas calculadas automáticamente de los comentarios (mención + sentimiento)
+  const { rows } = await query(`
+    SELECT zona,
+           COUNT(*)::int AS menciones,
+           SUM(CASE WHEN sentimiento='negativo' THEN 1 ELSE 0 END)::int AS negativos,
+           SUM(CASE WHEN sentimiento='positivo' THEN 1 ELSE 0 END)::int AS positivos
+    FROM menciones
+    WHERE zona IS NOT NULL AND zona <> ''
+    GROUP BY zona
+    ORDER BY menciones DESC`);
+  // nota = tono dominante
+  const zonas = rows.map(z => {
+    let nota = 'Mixto';
+    if (z.negativos > z.positivos * 1.5) nota = 'Predominio de quejas';
+    else if (z.positivos > z.negativos) nota = 'Predominio de apoyo';
+    return { zona: z.zona, menciones: z.menciones, negativos: z.negativos, positivos: z.positivos, nota };
+  });
+  res.json(zonas);
 });
 
 // Datos para la pestaña ESTADÍSTICAS (todas las gráficas)
@@ -487,10 +503,29 @@ app.get('/api/amenazas', requiereLogin, async (req, res) => {
   } catch (e) { console.error('Amenazas:', e); res.status(500).json({ error: 'Error al analizar amenazas.' }); }
 });
 
-// Denuncias ciudadanas (para Territorio)
+// Denuncias ciudadanas — generadas automáticamente de los comentarios
+// (comentarios negativos que mencionan una zona o dirección concreta)
 app.get('/api/denuncias', requiereLogin, async (req, res) => {
-  const { rows } = await query('SELECT * FROM denuncias ORDER BY fecha DESC NULLS LAST');
-  res.json(rows);
+  const { rows } = await query(`
+    SELECT id, fecha, zona, direccion, dolor AS tipo, senalado, texto AS descripcion, sentimiento, autor, red, permalink
+    FROM menciones
+    WHERE sentimiento='negativo'
+      AND (zona IS NOT NULL OR direccion IS NOT NULL OR dolor IS NOT NULL)
+    ORDER BY fecha DESC NULLS LAST
+    LIMIT 200`);
+  res.json(rows.map(r => ({
+    id: r.id,
+    fecha: r.fecha,
+    zona: r.zona || (r.direccion ? '—' : 'Sin zona'),
+    direccion: r.direccion,
+    tipo: r.tipo || 'Queja general',
+    senalado: r.senalado,
+    descripcion: r.descripcion,
+    autor: r.autor,
+    red: r.red,
+    enlace: r.permalink,
+    estado: 'Pendiente',
+  })));
 });
 
 // Proyectos con métricas (de la plantilla)
