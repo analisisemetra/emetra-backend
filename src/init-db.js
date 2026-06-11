@@ -151,6 +151,19 @@ CREATE TABLE IF NOT EXISTS credibilidad (
   cercania      INTEGER DEFAULT 0,
   creado_en     TIMESTAMPTZ DEFAULT now()
 );
+-- Histórico semanal de credibilidad (para la gráfica de evolución)
+CREATE TABLE IF NOT EXISTS credibilidad_historico (
+  id            SERIAL PRIMARY KEY,
+  entidad       TEXT NOT NULL,
+  semana        TEXT NOT NULL,        -- ej. "2026-S23" o fecha de la semana
+  puntaje       INTEGER DEFAULT 0,
+  respuesta     INTEGER DEFAULT 0,
+  transparencia INTEGER DEFAULT 0,
+  consistencia  INTEGER DEFAULT 0,
+  cercania      INTEGER DEFAULT 0,
+  creado_en     TIMESTAMPTZ DEFAULT now(),
+  UNIQUE(entidad, semana)
+);
 -- Zonas críticas (de la plantilla)
 CREATE TABLE IF NOT EXISTS zonas (
   id            SERIAL PRIMARY KEY,

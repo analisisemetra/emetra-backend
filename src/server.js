@@ -305,8 +305,8 @@ app.post('/api/noticias', requiereLogin, requierePermiso('amenazas'), async (req
     `INSERT INTO noticias (titulo, actor, tipo, postura, enlace) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
     [titulo.trim(), actor.trim(), tipoVal, postVal, (enlace || '').trim()]
   );
-  // crea o actualiza el actor (mapeo: civil/ficticio → empresario para la tabla actores)
-  const tipoActor = tipoVal === 'politico' ? 'politico' : (tipoVal === 'medio' ? 'medio' : 'empresario');
+  // crea o actualiza el actor con el tipo real (medio/politico/civil/ficticio)
+  const tipoActor = tipoVal;
   const existe = await query('SELECT id FROM actores WHERE lower(nombre) = lower($1) LIMIT 1', [actor.trim()]);
   if (existe.rows.length > 0) {
     // actualiza su postura a la más reciente
@@ -437,6 +437,45 @@ app.get('/api/credibilidad', requiereLogin, async (req, res) => {
     ORDER BY (CASE WHEN lower(entidad) LIKE '%héctor flores%' OR lower(entidad) LIKE '%hector flores%' THEN 0 ELSE 1 END),
              puntaje DESC`);
   res.json(rows);
+});
+
+// Registrar credibilidad de una semana (actualiza el snapshot Y guarda en histórico)
+app.post('/api/credibilidad', requiereLogin, requierePermiso('config'), async (req, res) => {
+  const { entidad, semana, puntaje, respuesta, transparencia, consistencia, cercania } = req.body || {};
+  if (!entidad || !semana) return res.status(400).json({ error: 'Falta entidad o semana.' });
+  const n = (v) => { const x = parseInt(v); return isNaN(x) ? 0 : Math.max(0, Math.min(100, x)); };
+  const vals = [entidad.trim(), semana.trim(), n(puntaje), n(respuesta), n(transparencia), n(consistencia), n(cercania)];
+  // histórico
+  await query(`
+    INSERT INTO credibilidad_historico (entidad, semana, puntaje, respuesta, transparencia, consistencia, cercania)
+    VALUES ($1,$2,$3,$4,$5,$6,$7)
+    ON CONFLICT (entidad, semana) DO UPDATE SET puntaje=$3, respuesta=$4, transparencia=$5, consistencia=$6, cercania=$7`, vals);
+  // snapshot actual (la credibilidad "vigente" = el último registro)
+  await query(`
+    INSERT INTO credibilidad (entidad, puntaje, respuesta, transparencia, consistencia, cercania)
+    VALUES ($1,$3,$4,$5,$6,$7)
+    ON CONFLICT (entidad) DO UPDATE SET puntaje=$3, respuesta=$4, transparencia=$5, consistencia=$6, cercania=$7`,
+    [vals[0], vals[1], vals[2], vals[3], vals[4], vals[5], vals[6]]);
+  await auditar('[CREDIBILIDAD]', `${req.usuario.usuario} registró ${entidad} en ${semana}`, req.usuario.usuario);
+  res.status(201).json({ ok: true });
+});
+
+// Evolución semanal de credibilidad (todas las entidades)
+app.get('/api/credibilidad-historico', requiereLogin, async (req, res) => {
+  const { rows } = await query(`SELECT entidad, semana, puntaje FROM credibilidad_historico ORDER BY semana, entidad`);
+  // organiza: { semanas:[...], entidades:{ nombre:[puntajes...] } }
+  const semanas = [...new Set(rows.map(r => r.semana))].sort();
+  const entidades = {};
+  for (const r of rows) {
+    if (!entidades[r.entidad]) entidades[r.entidad] = {};
+    entidades[r.entidad][r.semana] = r.puntaje;
+  }
+  // alinea cada entidad con todas las semanas (null donde no haya dato)
+  const series = {};
+  for (const ent of Object.keys(entidades)) {
+    series[ent] = semanas.map(s => entidades[ent][s] ?? null);
+  }
+  res.json({ semanas, series });
 });
 
 // Ficha del personaje principal (Héctor Flores): su estado resumido para el Pulso
