@@ -345,7 +345,10 @@ app.get('/api/panorama', requiereLogin, async (req, res) => {
   const totalCom = await query(`SELECT COUNT(*)::int AS n FROM menciones`);
   const pubs = await query(`SELECT COUNT(*)::int AS posts, COALESCE(SUM(alcance),0)::bigint AS alcance, COALESCE(SUM(plays),0)::bigint AS plays, COALESCE(SUM(likes+comentarios+compartidos),0)::bigint AS interacciones FROM publicaciones`);
   const porTema = await query(`SELECT tema, COUNT(*)::int AS posts, COALESCE(SUM(alcance),0)::bigint AS alcance FROM publicaciones WHERE tema <> '' GROUP BY tema ORDER BY alcance DESC`);
-  const porRed = await query(`SELECT red, COUNT(*)::int AS posts, COALESCE(SUM(plays),0)::bigint AS plays FROM publicaciones WHERE red <> '' GROUP BY red`);
+  const porRed = await query(`SELECT red, COUNT(*)::int AS posts, COALESCE(SUM(plays),0)::bigint AS plays, COALESCE(SUM(alcance),0)::bigint AS alcance FROM publicaciones WHERE red <> '' GROUP BY red ORDER BY alcance DESC`);
+  // frases recurrentes en comentarios negativos (palabras más comunes)
+  const negs = await query(`SELECT texto FROM menciones WHERE sentimiento='negativo' AND texto IS NOT NULL LIMIT 1000`);
+  const frases = calcularFrases(negs.rows.map(r => r.texto));
   // sentimiento en porcentajes
   const s = { positivo: 0, negativo: 0, neutro: 0 };
   sent.rows.forEach(r => { s[r.sentimiento] = r.n; });
@@ -363,9 +366,32 @@ app.get('/api/panorama', requiereLogin, async (req, res) => {
       conteo: s,
     },
     porTema: porTema.rows.map(r => ({ tema: r.tema, posts: r.posts, alcance: Number(r.alcance) })),
-    porRed: porRed.rows.map(r => ({ red: r.red, posts: r.posts, plays: Number(r.plays) })),
+    porRed: porRed.rows.map(r => ({ red: r.red, posts: r.posts, plays: Number(r.plays), alcance: Number(r.alcance) })),
+    frases,
   });
 });
+
+// Calcula frases/palabras recurrentes (bigramas) en una lista de textos
+function calcularFrases(textos) {
+  const stop = new Set(['que','de','la','el','los','las','un','una','y','o','a','en','con','por','para','se','su','sus','lo','le','les','del','al','es','son','no','si','ya','me','mi','te','tu','como','mas','más','pero','muy','este','esta','eso','esa','hay','han','ha','sus','está','están','solo','sólo','ni','yo','ellos','nos','porque','cuando','donde','aqui','aquí','asi','así']);
+  const conteo = new Map();
+  for (const t of textos) {
+    const palabras = String(t).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9ñ ]/g,' ').split(/\s+/).filter(w => w.length > 3 && !stop.has(w));
+    // bigramas
+    for (let i = 0; i < palabras.length - 1; i++) {
+      const bi = palabras[i] + ' ' + palabras[i+1];
+      conteo.set(bi, (conteo.get(bi) || 0) + 1);
+    }
+    // palabras sueltas relevantes
+    for (const w of palabras) conteo.set(w, (conteo.get(w) || 0) + 1);
+  }
+  return [...conteo.entries()]
+    .filter(([k, v]) => v >= 2)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 25)
+    .map(([frase, n]) => ({ frase, n }));
+}
+
 
 // Datos de CREDIBILIDAD
 app.get('/api/credibilidad', requiereLogin, async (req, res) => {
