@@ -11,6 +11,7 @@ import { inicializarBase } from './init-db.js';
 import { procesarXlsx } from './procesar-xlsx.js';
 import { procesarMetricas } from './procesar-metricas.js';
 import { leerTodasLasAlertas } from './leer-alertas.js';
+import { analizarAmenazas } from './amenazas.js';
 
 // Recibe archivos en memoria (hasta 10 MB), sin guardarlos en disco.
 const subida = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -476,6 +477,14 @@ app.get('/api/forense', requiereLogin, async (req, res) => {
     reincidentes: reincidentes.rows,
     influyentes: influyentes.rows,
   });
+});
+
+// Análisis de amenazas: hostilidad y patrones de coordinación (de comentarios reales)
+app.get('/api/amenazas', requiereLogin, async (req, res) => {
+  try {
+    const r = await analizarAmenazas();
+    res.json(r);
+  } catch (e) { console.error('Amenazas:', e); res.status(500).json({ error: 'Error al analizar amenazas.' }); }
 });
 
 // Denuncias ciudadanas (para Territorio)
