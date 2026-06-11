@@ -106,19 +106,23 @@ export async function analizarAmenazas() {
   const maxNeg = Math.max(...[...cuentas.values()].map(c => c.negativos), 1);
   const listaCuentas = [];
   for (const c of cuentas.values()) {
-    // 1. Volumen negativo (hasta 30)
-    const pVolumen = Math.min(30, (c.negativos / maxNeg) * 30);
-    // 2. Reincidencia: en cuántos posts distintos apareció (hasta 25)
-    const pReincidencia = Math.min(25, (c.posts.size - 1) * 8);
-    // 3. Sincronía temporal (hasta 20)
-    const pSincronia = Math.min(20, (sincroniaCuenta.get(c.profile_id) || 0) * 7);
-    // 4. Similitud de lenguaje (hasta 15)
-    const pLenguaje = Math.min(15, (lenguajeCuenta.get(c.profile_id) || 0) * 15);
-    // 5. Perfil sospechoso, solo X (hasta 10): pocos followers + muchos comentarios
+    // 1. Volumen negativo (hasta 35) — pesa más. Combina lo relativo (vs la peor)
+    //    con lo absoluto (cuántos negativos reales), para no inflar cuentas con 1-2.
+    const relativo = (c.negativos / maxNeg);            // 0 a 1
+    const absoluto = Math.min(1, c.negativos / 10);      // 10 negativos = tope
+    const pVolumen = Math.min(35, (relativo * 0.5 + absoluto * 0.5) * 35);
+    // 2. Reincidencia (hasta 30) — pesa más. En cuántos posts/comentarios reincidió.
+    const postsContados = c.posts.size > 0 ? c.posts.size : c.comentarios.length;
+    const pReincidencia = Math.min(30, Math.max(0, (postsContados - 1) * 7));
+    // 3. Sincronía temporal (hasta 15)
+    const pSincronia = Math.min(15, (sincroniaCuenta.get(c.profile_id) || 0) * 5);
+    // 4. Similitud de lenguaje (hasta 12)
+    const pLenguaje = Math.min(12, (lenguajeCuenta.get(c.profile_id) || 0) * 12);
+    // 5. Perfil sospechoso, solo X (hasta 8): pocos followers + varios comentarios
     let pPerfil = 0;
     if (c.red === 'X' && c.followers != null) {
-      if (c.followers < 100 && c.comentarios.length >= 3) pPerfil = 10;
-      else if (c.followers < 500 && c.comentarios.length >= 3) pPerfil = 5;
+      if (c.followers < 100 && c.comentarios.length >= 3) pPerfil = 8;
+      else if (c.followers < 500 && c.comentarios.length >= 3) pPerfil = 4;
     }
     const puntaje = Math.round(pVolumen + pReincidencia + pSincronia + pLenguaje + pPerfil);
 
@@ -127,7 +131,8 @@ export async function analizarAmenazas() {
     const ratioNeg = c.negativos / totalCom;
     const positivos = c.comentarios.filter(m => m.sentimiento === 'positivo').length;
     let bando;
-    if (ratioNeg >= 0.6 && c.negativos >= 2) bando = 'hostil';
+    // HOSTIL requiere un mínimo real de negatividad (no 1-2 comentarios sueltos)
+    if (c.negativos >= 4 && ratioNeg >= 0.5) bando = 'hostil';
     else if (positivos > c.negativos && positivos >= 2) bando = 'aliado';
     else bando = 'neutral';
 
