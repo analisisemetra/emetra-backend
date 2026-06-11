@@ -380,19 +380,57 @@ app.get('/api/zonas', requiereLogin, async (req, res) => {
 
 // Datos para la pestaña ESTADÍSTICAS (todas las gráficas)
 app.get('/api/estadisticas', requiereLogin, async (req, res) => {
-  // Alcance vs recepción por tema (de publicaciones + sentimiento de comentarios por tema si hubiera)
+  // Alcance vs recepción por tema (de publicaciones)
   const porTema = await query(`SELECT tema, COUNT(*)::int AS posts, COALESCE(SUM(alcance),0)::bigint AS alcance, COALESCE(SUM(likes+comentarios+compartidos),0)::bigint AS interacciones FROM publicaciones WHERE tema <> '' GROUP BY tema ORDER BY alcance DESC`);
-  const crisis = await query(`SELECT fecha, menciones FROM crisis_diaria ORDER BY fecha`);
-  const engagement = await query(`SELECT canal, er FROM engagement_canal ORDER BY er DESC`);
-  const porRed = await query(`SELECT red, COALESCE(SUM(plays),0)::bigint AS plays FROM publicaciones WHERE red <> '' GROUP BY red ORDER BY plays DESC`);
-  // sentimiento por tema (de los comentarios clasificados, si los hay)
-  const sentTema = await query(`SELECT tema, COUNT(*)::int AS posts FROM publicaciones WHERE tema <> '' GROUP BY tema`);
+  // Radar de crisis: menciones por día (de los comentarios reales, por fecha)
+  const crisis = await query(`SELECT to_char(fecha::date,'YYYY-MM-DD') AS fecha, COUNT(*)::int AS menciones FROM menciones WHERE fecha IS NOT NULL GROUP BY fecha::date ORDER BY fecha::date`);
+  // Plataformas con más alcance (de publicaciones, ranking por alcance)
+  const plataformas = await query(`SELECT red, COALESCE(SUM(alcance),0)::bigint AS alcance, COALESCE(SUM(plays),0)::bigint AS plays, COUNT(*)::int AS posts FROM publicaciones WHERE red <> '' GROUP BY red ORDER BY alcance DESC`);
+  // Nube de dolores (de los comentarios clasificados, por volumen)
+  const dolores = await query(`SELECT dolor, COUNT(*)::int AS n FROM menciones WHERE dolor IS NOT NULL GROUP BY dolor ORDER BY n DESC`);
+  // Sentimiento por tema (de los comentarios, si tuvieran tema; si no, de la tabla sentimiento_tema de la plantilla)
+  const sentTemaPlantilla = await query(`SELECT tema, positivos, negativos, neutros FROM sentimiento_tema ORDER BY (positivos+negativos+neutros) DESC`);
+  // Positivos vs negativos por semana (de la plantilla)
+  const semanal = await query(`SELECT semana, positivos, negativos FROM sentimiento_semanal ORDER BY semana`);
   res.json({
     porTema: porTema.rows.map(r => ({ tema: r.tema, posts: r.posts, alcance: Number(r.alcance), interacciones: Number(r.interacciones) })),
     crisis: crisis.rows.map(r => ({ fecha: r.fecha, menciones: r.menciones })),
-    engagement: engagement.rows.map(r => ({ canal: r.canal, er: Number(r.er) })),
-    porRed: porRed.rows.map(r => ({ red: r.red, plays: Number(r.plays) })),
-    sentTema: sentTema.rows,
+    plataformas: plataformas.rows.map(r => ({ red: r.red, alcance: Number(r.alcance), plays: Number(r.plays), posts: r.posts })),
+    dolores: dolores.rows.map(r => ({ dolor: r.dolor, n: r.n })),
+    sentTema: sentTemaPlantilla.rows,
+    semanal: semanal.rows,
+  });
+});
+
+// Sentimiento por actor (de la tabla actores, datos reales)
+app.get('/api/sentimiento-actores', requiereLogin, async (req, res) => {
+  // Cuenta actores por postura, agrupados — esto refleja tus actores reales
+  const { rows } = await query(`SELECT nombre, postura FROM actores ORDER BY nombre`);
+  res.json(rows);
+});
+
+// Datos forenses: reincidentes y cuentas de X con datos de perfil
+app.get('/api/forense', requiereLogin, async (req, res) => {
+  // Reincidentes: personas (profile_id) que aparecen en varias menciones negativas
+  const reincidentes = await query(`
+    SELECT autor, username, profile_id, red, COUNT(*)::int AS apariciones,
+           SUM(CASE WHEN sentimiento='negativo' THEN 1 ELSE 0 END)::int AS negativos,
+           MAX(followers) AS followers
+    FROM menciones
+    WHERE profile_id IS NOT NULL AND profile_id <> ''
+    GROUP BY autor, username, profile_id, red
+    HAVING COUNT(*) > 1
+    ORDER BY negativos DESC, apariciones DESC
+    LIMIT 50`);
+  // Cuentas de X con más seguidores que nos mencionan (influyentes)
+  const influyentes = await query(`
+    SELECT autor, username, followers, ubicacion, verificado, sentimiento, texto
+    FROM menciones
+    WHERE red='X' AND followers IS NOT NULL
+    ORDER BY followers DESC LIMIT 20`);
+  res.json({
+    reincidentes: reincidentes.rows,
+    influyentes: influyentes.rows,
   });
 });
 

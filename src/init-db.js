@@ -63,6 +63,8 @@ CREATE TABLE IF NOT EXISTS menciones (
   carga_id      INTEGER REFERENCES cargas(id) ON DELETE CASCADE,
   autor         TEXT,
   profile_id    TEXT,
+  username      TEXT,
+  red           TEXT,            -- Facebook | Instagram | TikTok | X
   fecha         TIMESTAMPTZ,
   likes         INTEGER DEFAULT 0,
   texto         TEXT,
@@ -71,8 +73,22 @@ CREATE TABLE IF NOT EXISTS menciones (
   confianza     REAL DEFAULT 0,  -- 0 a 1; bajo = dudoso, lo revisa una persona
   revisado      BOOLEAN DEFAULT false,
   zona          TEXT,            -- zona detectada en el texto (si aplica)
+  dolor         TEXT,            -- "dolor" detectado en el texto
+  -- datos forenses (sobre todo de X/Twitter)
+  followers     INTEGER,
+  bio           TEXT,
+  ubicacion     TEXT,
+  verificado    BOOLEAN,
   creado_en     TIMESTAMPTZ DEFAULT now()
 );
+-- Por si la tabla ya existía, agrega las columnas nuevas sin perder datos
+ALTER TABLE menciones ADD COLUMN IF NOT EXISTS username TEXT;
+ALTER TABLE menciones ADD COLUMN IF NOT EXISTS red TEXT;
+ALTER TABLE menciones ADD COLUMN IF NOT EXISTS dolor TEXT;
+ALTER TABLE menciones ADD COLUMN IF NOT EXISTS followers INTEGER;
+ALTER TABLE menciones ADD COLUMN IF NOT EXISTS bio TEXT;
+ALTER TABLE menciones ADD COLUMN IF NOT EXISTS ubicacion TEXT;
+ALTER TABLE menciones ADD COLUMN IF NOT EXISTS verificado BOOLEAN;
 CREATE INDEX IF NOT EXISTS idx_menciones_carga ON menciones(carga_id);
 CREATE INDEX IF NOT EXISTS idx_menciones_sent ON menciones(sentimiento);
 CREATE INDEX IF NOT EXISTS idx_menciones_dudoso ON menciones(revisado) WHERE confianza < 0.6;
@@ -142,6 +158,21 @@ CREATE TABLE IF NOT EXISTS engagement_canal (
   id            SERIAL PRIMARY KEY,
   canal         TEXT UNIQUE NOT NULL,
   er            NUMERIC DEFAULT 0
+);
+-- Sentimiento por tema (gráfica de estadísticas)
+CREATE TABLE IF NOT EXISTS sentimiento_tema (
+  id            SERIAL PRIMARY KEY,
+  tema          TEXT UNIQUE NOT NULL,
+  positivos     INTEGER DEFAULT 0,
+  negativos     INTEGER DEFAULT 0,
+  neutros       INTEGER DEFAULT 0
+);
+-- Sentimiento semanal (positivos vs negativos por semana)
+CREATE TABLE IF NOT EXISTS sentimiento_semanal (
+  id            SERIAL PRIMARY KEY,
+  semana        TEXT UNIQUE NOT NULL,
+  positivos     INTEGER DEFAULT 0,
+  negativos     INTEGER DEFAULT 0
 );
 -- Denuncias ciudadanas concretas
 CREATE TABLE IF NOT EXISTS denuncias (

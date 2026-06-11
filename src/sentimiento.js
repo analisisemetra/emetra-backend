@@ -102,3 +102,31 @@ export function detectarZona(texto) {
 
 // Umbral bajo el cual un comentario se marca como "dudoso" para revisión humana
 export const UMBRAL_DUDOSO = 0.6;
+
+// ─── Detección de "dolores" (temas de queja) en el texto ───
+// Cada dolor tiene un nombre canónico y las variantes que lo activan.
+const DOLORES = [
+  { nombre: 'Motos en banqueta',      claves: ['moto en banqueta','motos en banqueta','moto en la banqueta','motos en la banqueta','motociclistas en banqueta','moto en acera','motos en acera','banqueta'] },
+  { nombre: 'Multas injustas',        claves: ['multa injusta','multas injustas','multa abusiva','me multaron','poner multas','solo multan','multa','multas'] },
+  { nombre: 'Cepos / inmovilizadores',claves: ['cepo','cepos','inmovilizador','engrilletado','garra','araña'] },
+  { nombre: 'Congestión / tráfico',   claves: ['trafico','tráfico','congestion','congestión','embotellamiento','tranque','parqueo en la calle','no avanza'] },
+  { nombre: 'Transporte público',     claves: ['transmetro','transurbano','bus rojo','buses rojos','transporte publico','transporte público','camioneta','parada de bus'] },
+  { nombre: 'Buses / pilotos',        claves: ['piloto de bus','pilotos de bus','bus parado','buses parados','pirata','piratas','bus mal'] },
+  { nombre: 'Semáforos',              claves: ['semaforo','semáforo','semaforos','semáforos','luz roja','no sirve el semaforo'] },
+  { nombre: 'Señalización',           claves: ['senalizacion','señalización','no hay senales','sin señales','falta senalizacion'] },
+  { nombre: 'Corrupción / mordida',   claves: ['mordida','coima','soborno','corrupto','corrupcion','corrupción','coima'] },
+  { nombre: 'Vehículos oficiales',    claves: ['vehiculo oficial','vehículo oficial','carro oficial','patrulla mal','ellos si pueden'] },
+  { nombre: 'Falta de operativos',    claves: ['no hacen nada','donde estan','dónde están','nunca estan','falta operativo','no hay pmt','brillan por su ausencia'] },
+  { nombre: 'Licencias',              claves: ['licencia','licencias','renovar licencia','emision de licencia','emisión de licencia'] },
+  { nombre: 'Accidentes',             claves: ['accidente','choque','atropello','atropellaron','colision','colisión'] },
+];
+
+export function detectarDolor(texto) {
+  const t = sinAcento(normaliza(texto));
+  for (const d of DOLORES) {
+    for (const clave of d.claves) {
+      if (t.includes(sinAcento(clave))) return d.nombre;
+    }
+  }
+  return null;
+}

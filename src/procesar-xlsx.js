@@ -3,30 +3,55 @@
 // metadata arriba), clasifica cada comentario y lo guarda en la base.
 import XLSX from 'xlsx';
 import { pool } from './db.js';
-import { clasificarSentimiento, detectarZona, UMBRAL_DUDOSO } from './sentimiento.js';
+import { clasificarSentimiento, detectarZona, detectarDolor, UMBRAL_DUDOSO } from './sentimiento.js';
 
 // Busca la fila que tiene los encabezados reales (Name, Comment, Date...)
 function encontrarEncabezado(filas) {
   for (let i = 0; i < Math.min(filas.length, 15); i++) {
-    const fila = (filas[i] || []).map(c => String(c ?? '').trim());
-    const tieneComment = fila.some(c => /^comment$/i.test(c));
-    const tieneName = fila.some(c => /^name$/i.test(c));
-    if (tieneComment && tieneName) return i;
+    const fila = (filas[i] || []).map(c => String(c ?? '').trim().toLowerCase());
+    const tieneTexto = fila.some(c => /^(comment|tweet text|text)$/i.test(c));
+    const tieneNombre = fila.some(c => /^(name|username)$/i.test(c));
+    if (tieneTexto && tieneNombre) return i;
   }
   return -1;
 }
 
-// Convierte la fila de encabezado en un mapa { nombreColumna: índice }
+// Detecta de qué red es el archivo según sus columnas
+function detectarRed(encabezado) {
+  const cols = encabezado.map(c => String(c ?? '').trim().toLowerCase());
+  if (cols.includes('tweet text') || cols.includes('author followers')) return 'X';
+  if (cols.includes('unique id')) return 'TikTok';
+  if (cols.includes('username') && cols.includes('profile id')) return 'Instagram';
+  if (cols.includes('live video timestamp')) return 'Facebook';
+  return 'Facebook'; // por defecto
+}
+
+// Mapea columnas según la red. Captura lo común + lo forense de X.
 function mapaColumnas(encabezado) {
   const mapa = {};
   encabezado.forEach((nombre, idx) => {
     const n = String(nombre ?? '').trim().toLowerCase();
-    if (n === 'name') mapa.autor = idx;
+    // Texto del comentario (varía por red)
+    if (n === 'comment' || n === 'tweet text' || n === 'text') mapa.texto = idx;
+    // Nombre visible
+    else if (n === 'name') mapa.autor = idx;
+    // Usuario / handle
+    else if (n === 'username' || n === 'unique id') mapa.username = idx;
+    // Identificador único de persona
     else if (n === 'profile id') mapa.profileId = idx;
+    // Fecha
     else if (n === 'date') mapa.fecha = idx;
-    else if (n === 'likes') mapa.likes = idx;
-    else if (n === 'comment') mapa.texto = idx;
-    else if (n === 'comment permalink') mapa.permalink = idx;
+    // Likes / favoritos
+    else if (n === 'likes' || n === 'favorites') mapa.likes = idx;
+    else if (n === 'comment permalink' || n === 'status url') mapa.permalink = idx;
+    // ── Datos forenses de X/Twitter ──
+    else if (n === 'author followers') mapa.followers = idx;
+    else if (n === 'author friends') mapa.friends = idx;
+    else if (n === 'author statuses') mapa.statuses = idx;
+    else if (n === 'author bio') mapa.bio = idx;
+    else if (n === 'author location') mapa.location = idx;
+    else if (n === 'author verified') mapa.verified = idx;
+    else if (n === 'is retweet?') mapa.isRetweet = idx;
   });
   return mapa;
 }
@@ -53,8 +78,9 @@ export async function procesarXlsx(buffer, { archivo, subidoPor }) {
   }
   const cols = mapaColumnas(filas[idxEnc]);
   if (cols.texto === undefined) {
-    throw new Error('El archivo no tiene columna "Comment".');
+    throw new Error('El archivo no tiene columna de texto (Comment/Tweet Text).');
   }
+  const red = detectarRed(filas[idxEnc]);
 
   // Crea el registro de la carga
   const cargaRes = await pool.query(
@@ -65,34 +91,43 @@ export async function procesarXlsx(buffer, { archivo, subidoPor }) {
 
   let total = 0, positivos = 0, negativos = 0, neutros = 0, dudosos = 0;
 
-  // Procesa cada fila de datos (después del encabezado)
+  const valor = (fila, idx) => idx !== undefined ? String(fila[idx] ?? '').trim() : '';
+  const numero = (fila, idx) => {
+    if (idx === undefined) return null;
+    const n = parseInt(String(fila[idx] ?? '').replace(/[^\d]/g, ''));
+    return isNaN(n) ? null : n;
+  };
+
   for (let i = idxEnc + 1; i < filas.length; i++) {
     const fila = filas[i] || [];
-    const texto = String(fila[cols.texto] ?? '').trim();
-    if (!texto) continue; // salta filas vacías
+    const texto = valor(fila, cols.texto);
+    if (!texto) continue;
 
-    const autor = cols.autor !== undefined ? String(fila[cols.autor] ?? '').trim() : '';
-    const profileId = cols.profileId !== undefined ? String(fila[cols.profileId] ?? '').trim() : '';
-    const permalink = cols.permalink !== undefined ? String(fila[cols.permalink] ?? '').trim() : '';
-    let likes = 0;
-    if (cols.likes !== undefined) {
-      const l = parseInt(String(fila[cols.likes] ?? '').replace(/\D/g, ''));
-      likes = isNaN(l) ? 0 : l;
-    }
+    const autor = valor(fila, cols.autor);
+    const username = valor(fila, cols.username);
+    const profileId = valor(fila, cols.profileId);
+    const permalink = valor(fila, cols.permalink);
+    const likes = numero(fila, cols.likes) || 0;
     let fecha = null;
     if (cols.fecha !== undefined) {
-      const f = new Date(String(fila[cols.fecha] ?? ''));
+      const f = new Date(valor(fila, cols.fecha));
       if (!isNaN(f.getTime())) fecha = f.toISOString();
     }
+    // datos forenses (solo X los trae; en otras quedan null)
+    const followers = numero(fila, cols.followers);
+    const bio = valor(fila, cols.bio) || null;
+    const ubicacion = valor(fila, cols.location) || null;
+    const verificado = cols.verified !== undefined ? /^(yes|sí|si|true)$/i.test(valor(fila, cols.verified)) : null;
 
     const { sentimiento, confianza } = clasificarSentimiento(texto);
     const zona = detectarZona(texto);
+    const dolor = detectarDolor(texto);
     const esDudoso = confianza < UMBRAL_DUDOSO;
 
     await pool.query(
-      `INSERT INTO menciones (carga_id, autor, profile_id, fecha, likes, texto, permalink, sentimiento, confianza, zona)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-      [cargaId, autor, profileId, fecha, likes, texto, permalink, sentimiento, confianza, zona]
+      `INSERT INTO menciones (carga_id, autor, profile_id, username, red, fecha, likes, texto, permalink, sentimiento, confianza, zona, dolor, followers, bio, ubicacion, verificado)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+      [cargaId, autor, profileId, username, red, fecha, likes, texto, permalink, sentimiento, confianza, zona, dolor, followers, bio, ubicacion, verificado]
     );
 
     total++;
@@ -102,11 +137,10 @@ export async function procesarXlsx(buffer, { archivo, subidoPor }) {
     if (esDudoso) dudosos++;
   }
 
-  // Actualiza el resumen de la carga
   await pool.query(
     `UPDATE cargas SET total=$1, positivos=$2, negativos=$3, neutros=$4, dudosos=$5 WHERE id=$6`,
     [total, positivos, negativos, neutros, dudosos, cargaId]
   );
 
-  return { cargaId, archivo, total, positivos, negativos, neutros, dudosos };
+  return { cargaId, archivo, red, total, positivos, negativos, neutros, dudosos };
 }

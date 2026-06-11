@@ -163,5 +163,39 @@ export async function procesarMetricas(buffer) {
     }
   }
 
+  // ── HOJA SENTIMIENTO POR TEMA ──
+  const hST = buscarHoja(wb, 'Sentimiento por Tema');
+  if (hST) {
+    const filas = XLSX.utils.sheet_to_json(hST, { defval: '' });
+    await pool.query('DELETE FROM sentimiento_tema');
+    for (const f of filas) {
+      const tema = String(f['Tema'] ?? '').trim();
+      if (!tema || tema.startsWith('↑')) continue;
+      await pool.query(
+        `INSERT INTO sentimiento_tema (tema, positivos, negativos, neutros) VALUES ($1,$2,$3,$4)
+         ON CONFLICT (tema) DO UPDATE SET positivos=$2, negativos=$3, neutros=$4`,
+        [tema, num(f['Positivos']), num(f['Negativos']), num(f['Neutros'])]
+      );
+      resumen.sentTema = (resumen.sentTema||0) + 1;
+    }
+  }
+
+  // ── HOJA SENTIMIENTO SEMANAL ──
+  const hSS = buscarHoja(wb, 'Sentimiento Semanal');
+  if (hSS) {
+    const filas = XLSX.utils.sheet_to_json(hSS, { defval: '' });
+    await pool.query('DELETE FROM sentimiento_semanal');
+    for (const f of filas) {
+      const semana = String(f['Semana'] ?? '').trim();
+      if (!semana || semana.startsWith('↑')) continue;
+      await pool.query(
+        `INSERT INTO sentimiento_semanal (semana, positivos, negativos) VALUES ($1,$2,$3)
+         ON CONFLICT (semana) DO UPDATE SET positivos=$2, negativos=$3`,
+        [semana, num(f['Positivos']), num(f['Negativos'])]
+      );
+      resumen.semanal = (resumen.semanal||0) + 1;
+    }
+  }
+
   return resumen;
 }
