@@ -381,7 +381,7 @@ app.get('/api/panorama', requiereLogin, async (req, res) => {
   const totalCom = await query(`SELECT COUNT(*)::int AS n FROM menciones`);
   const pubs = await query(`SELECT COUNT(*)::int AS posts, COALESCE(SUM(alcance),0)::bigint AS alcance, COALESCE(SUM(plays),0)::bigint AS plays, COALESCE(SUM(likes+comentarios+compartidos),0)::bigint AS interacciones FROM publicaciones`);
   const porTema = await query(`SELECT tema, COUNT(*)::int AS posts, COALESCE(SUM(alcance),0)::bigint AS alcance FROM publicaciones WHERE tema <> '' GROUP BY tema ORDER BY alcance DESC`);
-  const porRed = await query(`SELECT red, COUNT(*)::int AS posts, COALESCE(SUM(plays),0)::bigint AS plays, COALESCE(SUM(alcance),0)::bigint AS alcance FROM publicaciones WHERE red <> '' GROUP BY red ORDER BY alcance DESC`);
+  const porRed = await query(`SELECT red, COUNT(*)::int AS posts, COALESCE(SUM(plays),0)::bigint AS plays, GREATEST(COALESCE(SUM(alcance),0), COALESCE(SUM(plays),0))::bigint AS alcance FROM publicaciones WHERE red <> '' GROUP BY red ORDER BY alcance DESC`);
   // frases recurrentes en comentarios negativos (palabras más comunes)
   const negs = await query(`SELECT texto FROM menciones WHERE sentimiento='negativo' AND texto IS NOT NULL LIMIT 1000`);
   const frases = calcularFrases(negs.rows.map(r => r.texto));
@@ -547,7 +547,7 @@ app.get('/api/estadisticas', requiereLogin, async (req, res) => {
   // Radar de crisis: menciones por día (de los comentarios reales, por fecha)
   const crisis = await query(`SELECT to_char(fecha::date,'YYYY-MM-DD') AS fecha, COUNT(*)::int AS menciones FROM menciones WHERE fecha IS NOT NULL GROUP BY fecha::date ORDER BY fecha::date`);
   // Plataformas con más alcance (de publicaciones, ranking por alcance)
-  const plataformas = await query(`SELECT red, COALESCE(SUM(alcance),0)::bigint AS alcance, COALESCE(SUM(plays),0)::bigint AS plays, COUNT(*)::int AS posts FROM publicaciones WHERE red <> '' GROUP BY red ORDER BY alcance DESC`);
+  const plataformas = await query(`SELECT red, COALESCE(SUM(alcance),0)::bigint AS alcance, COALESCE(SUM(plays),0)::bigint AS plays, GREATEST(COALESCE(SUM(alcance),0), COALESCE(SUM(plays),0))::bigint AS alcance_real, COUNT(*)::int AS posts FROM publicaciones WHERE red <> '' GROUP BY red ORDER BY alcance_real DESC`);
   // Nube de dolores: agrupa los cientos de dolores específicos en categorías amplias
   const doloresRaw = await query(`SELECT dolor, COUNT(*)::int AS n FROM menciones WHERE dolor IS NOT NULL AND dolor <> '' GROUP BY dolor`);
   const dolores = agruparDolores(doloresRaw.rows);
@@ -584,7 +584,7 @@ app.get('/api/estadisticas', requiereLogin, async (req, res) => {
   res.json({
     porTema: porTema.rows.map(r => ({ tema: r.tema, posts: r.posts, alcance: Number(r.alcance), interacciones: Number(r.interacciones) })),
     crisis: crisis.rows.map(r => ({ fecha: r.fecha, menciones: r.menciones })),
-    plataformas: plataformas.rows.map(r => ({ red: r.red, alcance: Number(r.alcance), plays: Number(r.plays), posts: r.posts })),
+    plataformas: plataformas.rows.map(r => ({ red: r.red, alcance: Number(r.alcance_real), alcanceReal: Number(r.alcance), plays: Number(r.plays), posts: r.posts })),
     dolores,
     sentTema,
     semanal,
