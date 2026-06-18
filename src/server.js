@@ -551,19 +551,84 @@ app.get('/api/estadisticas', requiereLogin, async (req, res) => {
   // Nube de dolores: agrupa los cientos de dolores específicos en categorías amplias
   const doloresRaw = await query(`SELECT dolor, COUNT(*)::int AS n FROM menciones WHERE dolor IS NOT NULL AND dolor <> '' GROUP BY dolor`);
   const dolores = agruparDolores(doloresRaw.rows);
-  // Sentimiento por tema (de los comentarios, si tuvieran tema; si no, de la tabla sentimiento_tema de la plantilla)
-  const sentTemaPlantilla = await query(`SELECT tema, positivos, negativos, neutros FROM sentimiento_tema ORDER BY (positivos+negativos+neutros) DESC`);
-  // Positivos vs negativos por semana (de la plantilla)
-  const semanal = await query(`SELECT semana, positivos, negativos FROM sentimiento_semanal ORDER BY semana`);
+
+  // Sentimiento por tema: automático, agrupando los dolores en categorías con su sentimiento
+  const doloresSent = await query(`
+    SELECT dolor,
+           SUM(CASE WHEN sentimiento='positivo' THEN 1 ELSE 0 END)::int AS positivos,
+           SUM(CASE WHEN sentimiento='negativo' THEN 1 ELSE 0 END)::int AS negativos,
+           SUM(CASE WHEN sentimiento='neutro' THEN 1 ELSE 0 END)::int AS neutros
+    FROM menciones WHERE dolor IS NOT NULL AND dolor <> '' GROUP BY dolor`);
+  let sentTema = agruparSentTema(doloresSent.rows);
+  // si no hay comentarios con dolor, cae a la plantilla
+  if (sentTema.length === 0) {
+    const sp = await query(`SELECT tema, positivos, negativos, neutros FROM sentimiento_tema ORDER BY (positivos+negativos+neutros) DESC`);
+    sentTema = sp.rows;
+  }
+
+  // Positivos vs negativos por semana: automático, agrupando comentarios por semana real
+  const semanalRows = await query(`
+    SELECT to_char(date_trunc('week', fecha), 'DD Mon') AS semana,
+           date_trunc('week', fecha) AS orden,
+           SUM(CASE WHEN sentimiento='positivo' THEN 1 ELSE 0 END)::int AS positivos,
+           SUM(CASE WHEN sentimiento='negativo' THEN 1 ELSE 0 END)::int AS negativos
+    FROM menciones WHERE fecha IS NOT NULL
+    GROUP BY date_trunc('week', fecha) ORDER BY orden`);
+  let semanal = semanalRows.rows.map(r => ({ semana: r.semana, positivos: r.positivos, negativos: r.negativos }));
+  // si no hay comentarios con fecha, cae a la plantilla
+  if (semanal.length === 0) {
+    const sw = await query(`SELECT semana, positivos, negativos FROM sentimiento_semanal ORDER BY semana`);
+    semanal = sw.rows;
+  }
+
   res.json({
     porTema: porTema.rows.map(r => ({ tema: r.tema, posts: r.posts, alcance: Number(r.alcance), interacciones: Number(r.interacciones) })),
     crisis: crisis.rows.map(r => ({ fecha: r.fecha, menciones: r.menciones })),
     plataformas: plataformas.rows.map(r => ({ red: r.red, alcance: Number(r.alcance), plays: Number(r.plays), posts: r.posts })),
     dolores,
-    sentTema: sentTemaPlantilla.rows,
-    semanal: semanal.rows,
+    sentTema,
+    semanal,
   });
 });
+
+// Agrupa el sentimiento por categoría de dolor (mismas categorías que agruparDolores)
+function agruparSentTema(filas) {
+  const norm = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const CATEGORIAS = [
+    ['Motos en banqueta', ['banqueta', 'acera', 'motociclistas en']],
+    ['Multas injustas / abusivas', ['multa injusta', 'multas injusta', 'multa abusiva', 'multas abusiva', 'excesiva', 'extorsion', 'solo multa', 'recaudacion', 'fantasma', 'falsa']],
+    ['Corrupción / mordida', ['corrupc', 'corrupto', 'mordida', 'coima', 'soborno', 'malversacion', 'enriquecimiento']],
+    ['Falta de operativos', ['falta de operativo', 'insuficiente', 'no hacen nada', 'inaccion', 'no estan', 'donde estan']],
+    ['Cepos / inmovilizadores', ['cepo', 'inmovilizador', 'garra', 'arana']],
+    ['Congestión / tráfico', ['trafico', 'congestion', 'tranque', 'embotellamiento', 'caos']],
+    ['Transporte público', ['transporte publico', 'transmetro', 'transurbano', 'bus rojo', 'camioneta', 'piloto']],
+    ['Taxis / transporte pirata', ['taxi pirata', 'pirata']],
+    ['Licencias', ['licencia']],
+    ['Educación vial', ['educacion vial', 'cultura vial']],
+    ['Semáforos / señalización', ['semaforo', 'senalizacion', 'senal']],
+    ['Parqueo indebido', ['apartan parqueo', 'aparta parqueo', 'apartaparqueo', 'estacionamiento irregular', 'mal parqueo', 'parqueo informal', 'ocupan parqueo']],
+    ['Ventas / obstáculos en vía', ['venta informal', 'venta de licencia', 'vendedores', 'obstaculo', 'apartadores']],
+    ['Doble moral / oficiales', ['doble moral', 'vehiculo oficial', 'doble estandar', 'favoritismo', 'arrogancia']],
+    ['Infraestructura vial', ['infraestructura', 'baches', 'mal estado', 'carreteras', 'mantenimiento']],
+    ['Accidentes / seguridad', ['accidente', 'choque', 'atropell', 'muerte', 'ebrio', 'alcohol']],
+  ];
+  const acum = {};
+  for (const f of filas) {
+    const t = norm(f.dolor);
+    for (const [nombre, claves] of CATEGORIAS) {
+      if (claves.some(k => t.includes(norm(k)))) {
+        if (!acum[nombre]) acum[nombre] = { tema: nombre, positivos: 0, negativos: 0, neutros: 0 };
+        acum[nombre].positivos += f.positivos;
+        acum[nombre].negativos += f.negativos;
+        acum[nombre].neutros += f.neutros;
+        break;
+      }
+    }
+  }
+  return Object.values(acum)
+    .sort((a, b) => (b.positivos + b.negativos + b.neutros) - (a.positivos + a.negativos + a.neutros))
+    .slice(0, 10);
+}
 
 // Agrupa dolores específicos en categorías amplias por palabras clave.
 // Devuelve el top 15 con su categoría canónica.
