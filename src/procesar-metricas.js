@@ -17,6 +17,31 @@ function buscarHoja(wb, nombre) {
   return encontrada ? wb.Sheets[encontrada] : null;
 }
 
+// Lee una hoja como objetos, detectando automáticamente la fila de encabezados.
+// (La plantilla tiene título y descripción antes de los encabezados reales.)
+function leerHoja(hoja, columnasClave) {
+  // saca todo como matriz de filas
+  const matriz = XLSX.utils.sheet_to_json(hoja, { header: 1, defval: '' });
+  // busca la fila que contiene las columnas clave (ej. "Fecha", "Red")
+  let filaEnc = -1;
+  for (let i = 0; i < Math.min(matriz.length, 15); i++) {
+    const fila = (matriz[i] || []).map(c => String(c).toLowerCase().trim());
+    const aciertos = columnasClave.filter(k => fila.includes(k.toLowerCase())).length;
+    if (aciertos >= Math.min(2, columnasClave.length)) { filaEnc = i; break; }
+  }
+  if (filaEnc === -1) return [];
+  const encabezados = matriz[filaEnc].map(c => String(c).trim());
+  const filas = [];
+  for (let i = filaEnc + 1; i < matriz.length; i++) {
+    const fila = matriz[i] || [];
+    if (fila.every(c => c === '' || c === null || c === undefined)) continue;
+    const obj = {};
+    encabezados.forEach((h, j) => { if (h) obj[h] = fila[j] ?? ''; });
+    filas.push(obj);
+  }
+  return filas;
+}
+
 export async function procesarMetricas(buffer) {
   const wb = XLSX.read(buffer, { type: 'buffer', cellDates: true });
   const resumen = { publicaciones: 0, credibilidad: 0, zonas: 0 };
@@ -24,14 +49,13 @@ export async function procesarMetricas(buffer) {
   // ── HOJA PUBLICACIONES ──
   const hPub = buscarHoja(wb, 'Publicaciones');
   if (hPub) {
-    const filas = XLSX.utils.sheet_to_json(hPub, { defval: '' });
-    await pool.query('DELETE FROM publicaciones'); // reemplaza todo (la plantilla es la verdad)
+    const filas = leerHoja(hPub, ['Fecha', 'Red', 'Alcance']);
+    if (filas.length > 0) await pool.query('DELETE FROM publicaciones'); // reemplaza solo si hay datos nuevos
     for (const f of filas) {
-      const texto = String(f['Texto/Título del post'] ?? f['Texto'] ?? '').trim();
-      const red = String(f['Red Social'] ?? f['Red'] ?? '').trim();
+      const texto = String(f['Texto del post'] ?? f['Texto/Título del post'] ?? f['Texto'] ?? '').trim();
+      const red = String(f['Red'] ?? f['Red Social'] ?? '').trim();
       const tema = String(f['Tema'] ?? '').trim();
       if (!red && !tema && !texto) continue; // fila vacía
-      if (texto.startsWith('↑') || red.startsWith('↑')) continue; // fila de nota
       let fecha = null;
       const fv = f['Fecha'];
       if (fv instanceof Date && !isNaN(fv)) fecha = fv.toISOString().slice(0, 10);
@@ -128,8 +152,8 @@ export async function procesarMetricas(buffer) {
   // ── HOJA CRISIS DIARIA ──
   const hCri = buscarHoja(wb, 'Crisis Diaria');
   if (hCri) {
-    const filas = XLSX.utils.sheet_to_json(hCri, { defval: '' });
-    await pool.query('DELETE FROM crisis_diaria');
+    const filas = leerHoja(hCri, ['Fecha', 'Menciones del día']);
+    if (filas.length > 0) await pool.query('DELETE FROM crisis_diaria');
     for (const f of filas) {
       const fv = f['Fecha'];
       let fecha = null;
@@ -139,7 +163,7 @@ export async function procesarMetricas(buffer) {
       await pool.query(
         `INSERT INTO crisis_diaria (fecha, menciones) VALUES ($1,$2)
          ON CONFLICT (fecha) DO UPDATE SET menciones=$2`,
-        [fecha, num(f['Menciones ese día']??f['Menciones'])]
+        [fecha, num(f['Menciones del día'] ?? f['Menciones ese día'] ?? f['Menciones'])]
       );
       resumen.crisis = (resumen.crisis||0) + 1;
     }
