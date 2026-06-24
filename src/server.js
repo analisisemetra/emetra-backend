@@ -10,6 +10,7 @@ import { firmarToken, requiereLogin, requierePermiso } from './auth.js';
 import { inicializarBase } from './init-db.js';
 import { procesarXlsx } from './procesar-xlsx.js';
 import { procesarMetricas } from './procesar-metricas.js';
+import { hayApiKey, clasificarConIA } from './clasificador-ia.js';
 import { leerTodasLasAlertas } from './leer-alertas.js';
 import { analizarAmenazas } from './amenazas.js';
 
@@ -541,6 +542,53 @@ app.get('/api/zonas', requiereLogin, async (req, res) => {
 });
 
 // Datos para la pestaña ESTADÍSTICAS (todas las gráficas)
+// Reanaliza TODOS los comentarios con la IA (reprocesa lo viejo con el análisis nuevo)
+app.post('/api/reanalizar', requiereLogin, requierePermiso('decisiones'), async (req, res) => {
+  if (!hayApiKey()) return res.status(400).json({ error: 'No hay API key de IA configurada en el servidor.' });
+  try {
+    const { rows } = await query(`SELECT id, texto FROM menciones WHERE texto IS NOT NULL ORDER BY id`);
+    if (rows.length === 0) return res.json({ ok: true, total: 0, mensaje: 'No hay comentarios para reanalizar.' });
+    let procesados = 0;
+    // procesa en bloques para no saturar memoria
+    const BLOQUE = 200;
+    for (let i = 0; i < rows.length; i += BLOQUE) {
+      const grupo = rows.slice(i, i + BLOQUE);
+      const clas = await clasificarConIA(grupo.map(r => r.texto));
+      for (let j = 0; j < grupo.length; j++) {
+        const c = clas[j]; if (!c) continue;
+        await query(
+          `UPDATE menciones SET sentimiento=$1, dolor=COALESCE($2,dolor), zona=COALESCE($3,zona), direccion=$4, senalado=$5, emocion=$6, tema_ia=$7, intensidad=$8, resumen=$9 WHERE id=$10`,
+          [c.sentimiento, c.dolor, c.zona, c.direccion, c.senalado, c.emocion, c.tema, c.intensidad, c.resumen, grupo[j].id]
+        );
+        procesados++;
+      }
+    }
+    await auditar('[REANÁLISIS]', `${req.usuario.usuario} reanalizó ${procesados} comentarios con IA`, req.usuario.usuario);
+    res.json({ ok: true, total: procesados });
+  } catch (e) { console.error('Reanalizar:', e); res.status(500).json({ error: 'Error al reanalizar: ' + e.message }); }
+});
+
+// Dashboard de sentimientos enriquecido: emoción, tema, intensidad
+app.get('/api/dashboard-sentimientos', requiereLogin, async (req, res) => {
+  const porEmocion = await query(`SELECT emocion, COUNT(*)::int AS n FROM menciones WHERE emocion IS NOT NULL GROUP BY emocion ORDER BY n DESC`);
+  const porTema = await query(`SELECT tema_ia AS tema, COUNT(*)::int AS n,
+      SUM(CASE WHEN sentimiento='positivo' THEN 1 ELSE 0 END)::int AS positivos,
+      SUM(CASE WHEN sentimiento='negativo' THEN 1 ELSE 0 END)::int AS negativos,
+      SUM(CASE WHEN sentimiento='neutro' THEN 1 ELSE 0 END)::int AS neutros,
+      ROUND(AVG(intensidad)::numeric,1) AS intensidad_prom
+      FROM menciones WHERE tema_ia IS NOT NULL GROUP BY tema_ia ORDER BY n DESC`);
+  const porIntensidad = await query(`SELECT intensidad, COUNT(*)::int AS n FROM menciones WHERE intensidad IS NOT NULL GROUP BY intensidad ORDER BY intensidad`);
+  // resúmenes más intensos (los reclamos/elogios más fuertes)
+  const masIntensos = await query(`SELECT resumen, sentimiento, emocion, tema_ia AS tema, intensidad, autor, red, texto, permalink
+      FROM menciones WHERE resumen IS NOT NULL AND intensidad >= 4 ORDER BY intensidad DESC, id DESC LIMIT 30`);
+  res.json({
+    porEmocion: porEmocion.rows,
+    porTema: porTema.rows.map(r => ({ ...r, intensidad_prom: Number(r.intensidad_prom) })),
+    porIntensidad: porIntensidad.rows,
+    masIntensos: masIntensos.rows,
+  });
+});
+
 app.get('/api/estadisticas', requiereLogin, async (req, res) => {
   // Alcance vs recepción por tema (de publicaciones)
   const porTema = await query(`SELECT tema, COUNT(*)::int AS posts, COALESCE(SUM(alcance),0)::bigint AS alcance, COALESCE(SUM(likes+comentarios+compartidos),0)::bigint AS interacciones FROM publicaciones WHERE tema <> '' GROUP BY tema ORDER BY alcance DESC`);

@@ -141,6 +141,7 @@ export async function procesarXlsx(buffer, { archivo, subidoPor }) {
   for (let k = 0; k < registros.length; k++) {
     const r = registros[k];
     let sentimiento, confianza, dolor, zona, direccion = null, senalado = null;
+    let emocion = null, tema_ia = null, intensidad = null, resumen = null;
     if (clasificaciones && clasificaciones[k]) {
       const cl = clasificaciones[k];
       sentimiento = cl.sentimiento;
@@ -149,6 +150,10 @@ export async function procesarXlsx(buffer, { archivo, subidoPor }) {
       zona = cl.zona || detectarZona(r.texto);
       direccion = cl.direccion || null;
       senalado = cl.senalado || null;
+      emocion = cl.emocion || null;
+      tema_ia = cl.tema || null;
+      intensidad = cl.intensidad || null;
+      resumen = cl.resumen || null;
     } else {
       const c = clasificarSentimiento(r.texto);
       sentimiento = c.sentimiento; confianza = c.confianza;
@@ -158,9 +163,9 @@ export async function procesarXlsx(buffer, { archivo, subidoPor }) {
     const esDudoso = confianza < UMBRAL_DUDOSO;
 
     await pool.query(
-      `INSERT INTO menciones (carga_id, autor, profile_id, username, red, fecha, likes, texto, permalink, sentimiento, confianza, zona, dolor, followers, bio, ubicacion, verificado, direccion, senalado)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
-      [cargaId, r.autor, r.profileId, r.username, red, r.fecha, r.likes, r.texto, r.permalink, sentimiento, confianza, zona, dolor, r.followers, r.bio, r.ubicacion, r.verificado, direccion, senalado]
+      `INSERT INTO menciones (carga_id, autor, profile_id, username, red, fecha, likes, texto, permalink, sentimiento, confianza, zona, dolor, followers, bio, ubicacion, verificado, direccion, senalado, emocion, tema_ia, intensidad, resumen)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
+      [cargaId, r.autor, r.profileId, r.username, red, r.fecha, r.likes, r.texto, r.permalink, sentimiento, confianza, zona, dolor, r.followers, r.bio, r.ubicacion, r.verificado, direccion, senalado, emocion, tema_ia, intensidad, resumen]
     );
 
     total++;
