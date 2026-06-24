@@ -37,3 +37,11 @@ export function requierePermiso(permiso) {
     next();
   };
 }
+
+// Exige que el usuario sea Administrador (para acciones sensibles como cargar datos)
+export function requiereAdmin(req, res, next) {
+  if (!/admin/i.test(req.usuario?.rol || '')) {
+    return res.status(403).json({ error: 'Solo el administrador puede realizar esta acción.' });
+  }
+  next();
+}
