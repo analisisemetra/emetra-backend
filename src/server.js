@@ -11,6 +11,7 @@ import { inicializarBase } from './init-db.js';
 import { procesarXlsx } from './procesar-xlsx.js';
 import { procesarMetricas } from './procesar-metricas.js';
 import { hayApiKey, clasificarConIA } from './clasificador-ia.js';
+import { generarResumenEjecutivo } from './resumen-ejecutivo.js';
 import { leerTodasLasAlertas } from './leer-alertas.js';
 import { analizarAmenazas } from './amenazas.js';
 
@@ -484,14 +485,18 @@ app.get('/api/ficha-principal', requiereLogin, async (req, res) => {
   const nombre = 'Héctor Flores';
   // credibilidad
   const cred = await query(`SELECT * FROM credibilidad WHERE lower(entidad) LIKE '%héctor flores%' OR lower(entidad) LIKE '%hector flores%' LIMIT 1`);
-  // menciones en comentarios (texto que lo nombra)
+  // menciones en comentarios (texto que lo nombra) — solo para el CONTEO de menciones
   const menc = await query(`
-    SELECT COUNT(*)::int AS total,
-           SUM(CASE WHEN sentimiento='positivo' THEN 1 ELSE 0 END)::int AS pos,
-           SUM(CASE WHEN sentimiento='negativo' THEN 1 ELSE 0 END)::int AS neg,
-           SUM(CASE WHEN sentimiento='neutro' THEN 1 ELSE 0 END)::int AS neu
+    SELECT COUNT(*)::int AS total
     FROM menciones
     WHERE lower(texto) LIKE '%héctor flores%' OR lower(texto) LIKE '%hector flores%' OR lower(texto) LIKE '%gerente%emetra%'`);
+  // SENTIMIENTO: del último mes registrado en la evolución mensual de Héctor Flores
+  const sentMes = await query(`
+    SELECT sm.positivo, sm.negativo, sm.neutro, sm.anio, sm.mes
+    FROM sentimiento_mensual sm
+    JOIN entidades e ON e.id = sm.entidad_id
+    WHERE lower(e.nombre) LIKE '%héctor flores%' OR lower(e.nombre) LIKE '%hector flores%'
+    ORDER BY sm.anio DESC, sm.mes DESC LIMIT 1`);
   // menciones en medios (alertas)
   const alertas = await query(`
     SELECT COUNT(*)::int AS total FROM menciones_alertas
@@ -501,18 +506,24 @@ app.get('/api/ficha-principal', requiereLogin, async (req, res) => {
     SELECT titulo, fuente_nombre, enlace, publicado FROM menciones_alertas
     WHERE lower(titulo) LIKE '%héctor flores%' OR lower(titulo) LIKE '%hector flores%' OR lower(resumen) LIKE '%héctor flores%' OR lower(resumen) LIKE '%hector flores%'
     ORDER BY publicado DESC NULLS LAST LIMIT 5`);
-  const m = menc.rows[0];
-  const totalCom = m.total || 0;
+  const totalCom = menc.rows[0].total || 0;
+  // porcentajes de sentimiento: del mes más reciente de la evolución
+  let pctPos = 0, pctNeg = 0, pctNeu = 0;
+  if (sentMes.rows.length > 0) {
+    const s = sentMes.rows[0];
+    const suma = (s.positivo || 0) + (s.negativo || 0) + (s.neutro || 0) || 1;
+    pctPos = Math.round((s.positivo || 0) / suma * 100);
+    pctNeg = Math.round((s.negativo || 0) / suma * 100);
+    pctNeu = Math.round((s.neutro || 0) / suma * 100);
+  }
   res.json({
     nombre,
     credibilidad: cred.rows[0] || null,
     menciones: {
       total: totalCom,
-      positivos: m.pos || 0,
-      negativos: m.neg || 0,
-      neutros: m.neu || 0,
-      pctPos: totalCom ? Math.round((m.pos||0)/totalCom*100) : 0,
-      pctNeg: totalCom ? Math.round((m.neg||0)/totalCom*100) : 0,
+      pctPos,
+      pctNeg,
+      pctNeu,
     },
     menciones_medios: alertas.rows[0].total || 0,
     ultimas_medios: ultimas.rows,
@@ -568,9 +579,29 @@ app.post('/api/reanalizar', requiereLogin, requierePermiso('decisiones'), async 
   } catch (e) { console.error('Reanalizar:', e); res.status(500).json({ error: 'Error al reanalizar: ' + e.message }); }
 });
 
+// ─── RESUMEN EJECUTIVO IA ───
+// Trae el último resumen guardado
+app.get('/api/resumen-ejecutivo', requiereLogin, async (req, res) => {
+  const { rows } = await query(`SELECT contenido, generado_en FROM resumen_ejecutivo ORDER BY generado_en DESC LIMIT 1`);
+  if (rows.length === 0) return res.json(null);
+  res.json({ ...rows[0].contenido, generado_en: rows[0].generado_en });
+});
+// Genera un resumen nuevo con IA (consume presupuesto)
+app.post('/api/resumen-ejecutivo', requiereLogin, requierePermiso('panorama'), async (req, res) => {
+  if (!hayApiKey()) return res.status(400).json({ error: 'No hay API key de IA configurada.' });
+  try {
+    const resumen = await generarResumenEjecutivo();
+    if (resumen.vacio) return res.json(resumen);
+    await query(`INSERT INTO resumen_ejecutivo (contenido) VALUES ($1)`, [JSON.stringify(resumen)]);
+    // limpia resúmenes viejos (deja los últimos 10)
+    await query(`DELETE FROM resumen_ejecutivo WHERE id NOT IN (SELECT id FROM resumen_ejecutivo ORDER BY generado_en DESC LIMIT 10)`);
+    await auditar('[RESUMEN]', `${req.usuario.usuario} generó resumen ejecutivo IA`, req.usuario.usuario);
+    res.json(resumen);
+  } catch (e) { console.error('Resumen ejecutivo:', e); res.status(500).json({ error: 'Error al generar: ' + e.message }); }
+});
+
 // Dashboard de sentimientos enriquecido: emoción, tema, intensidad
-app.get('/api/dashboard-sentimientos', requiereLogin, async (req, res) => {
-  const porEmocion = await query(`SELECT emocion, COUNT(*)::int AS n FROM menciones WHERE emocion IS NOT NULL GROUP BY emocion ORDER BY n DESC`);
+app.get('/api/dashboard-sentimientos', requiereLogin, async (req, res) => {  const porEmocion = await query(`SELECT emocion, COUNT(*)::int AS n FROM menciones WHERE emocion IS NOT NULL GROUP BY emocion ORDER BY n DESC`);
   const porTema = await query(`SELECT tema_ia AS tema, COUNT(*)::int AS n,
       SUM(CASE WHEN sentimiento='positivo' THEN 1 ELSE 0 END)::int AS positivos,
       SUM(CASE WHEN sentimiento='negativo' THEN 1 ELSE 0 END)::int AS negativos,
