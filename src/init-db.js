@@ -130,7 +130,12 @@ CREATE TABLE IF NOT EXISTS noticias (
   enlace        TEXT,
   creado_en     TIMESTAMPTZ DEFAULT now()
 );
--- Publicaciones con sus métricas (de la plantilla de Excel)
+-- Resumen ejecutivo generado por IA (guarda el último)
+CREATE TABLE IF NOT EXISTS resumen_ejecutivo (
+  id            SERIAL PRIMARY KEY,
+  contenido     JSONB NOT NULL,
+  generado_en   TIMESTAMPTZ DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS publicaciones (
   id            SERIAL PRIMARY KEY,
   fecha         DATE,
