@@ -95,6 +95,9 @@ ALTER TABLE menciones ADD COLUMN IF NOT EXISTS emocion TEXT;
 ALTER TABLE menciones ADD COLUMN IF NOT EXISTS tema_ia TEXT;
 ALTER TABLE menciones ADD COLUMN IF NOT EXISTS intensidad INTEGER;
 ALTER TABLE menciones ADD COLUMN IF NOT EXISTS resumen TEXT;
+-- Por si menciones_alertas ya existía, agrega las columnas nuevas
+ALTER TABLE menciones_alertas ADD COLUMN IF NOT EXISTS sentimiento_medio TEXT;
+ALTER TABLE menciones_alertas ADD COLUMN IF NOT EXISTS motivo_medio TEXT;
 CREATE INDEX IF NOT EXISTS idx_menciones_carga ON menciones(carga_id);
 CREATE INDEX IF NOT EXISTS idx_menciones_sent ON menciones(sentimiento);
 CREATE INDEX IF NOT EXISTS idx_menciones_dudoso ON menciones(revisado) WHERE confianza < 0.6;
@@ -246,6 +249,19 @@ CREATE TABLE IF NOT EXISTS menciones_alertas (
   resumen       TEXT,
   publicado     TIMESTAMPTZ,
   guid          TEXT UNIQUE,          -- identificador único para no duplicar
+  leida         BOOLEAN DEFAULT false,
+  sentimiento_medio TEXT,             -- favor | contra | neutral (postura del medio hacia tus entidades)
+  motivo_medio  TEXT,                 -- por qué la IA lo clasificó así, en pocas palabras
+  creado_en     TIMESTAMPTZ DEFAULT now()
+);
+-- Alertas de crisis generadas automáticamente por la IA (vigilancia sin intervención humana)
+CREATE TABLE IF NOT EXISTS alertas_crisis (
+  id            SERIAL PRIMARY KEY,
+  tipo          TEXT,                 -- sentimiento | coordinado | tema | volumen
+  severidad     TEXT DEFAULT 'media', -- media | alta | critica
+  titulo        TEXT,
+  explicacion   TEXT,
+  recomendacion TEXT,
   leida         BOOLEAN DEFAULT false,
   creado_en     TIMESTAMPTZ DEFAULT now()
 );

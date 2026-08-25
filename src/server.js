@@ -13,6 +13,8 @@ import { procesarMetricas } from './procesar-metricas.js';
 import { hayApiKey, clasificarConIA } from './clasificador-ia.js';
 import { generarResumenEjecutivo } from './resumen-ejecutivo.js';
 import { leerTodasLasAlertas } from './leer-alertas.js';
+import { clasificarAlertasPendientes, ambienteMedios } from './clasificador-medios.js';
+import { evaluarCrisis } from './alertas-crisis.js';
 import { analizarAmenazas } from './amenazas.js';
 
 // Recibe archivos en memoria (hasta 10 MB), sin guardarlos en disco.
@@ -914,7 +916,11 @@ app.delete('/api/fuentes/:id', requiereLogin, requierePermiso('config'), async (
 app.post('/api/alertas/refrescar', requiereLogin, async (req, res) => {
   try {
     const r = await leerTodasLasAlertas();
-    res.json(r);
+    // aprovecha para clasificar medios pendientes y revisar si hay crisis
+    let clasificadas = 0, crisis = null;
+    try { clasificadas = (await clasificarAlertasPendientes()).clasificadas || 0; } catch (e) { console.error('Clasificar medios:', e.message); }
+    try { crisis = await evaluarCrisis(false); } catch (e) { console.error('Evaluar crisis:', e.message); }
+    res.json({ ...r, clasificadas, crisis: crisis?.generada ? crisis.alerta : null });
   } catch (e) { console.error(e); res.status(500).json({ error: 'Error al leer alertas.' }); }
 });
 // Listar menciones detectadas (más recientes primero)
@@ -931,6 +937,35 @@ app.get('/api/alertas/nuevas', requiereLogin, async (req, res) => {
 app.post('/api/alertas/marcar-leidas', requiereLogin, async (req, res) => {
   await query('UPDATE menciones_alertas SET leida = true WHERE leida = false');
   res.json({ ok: true });
+});
+
+// ─── ALERTAS DE CRISIS (IA vigila sola) ───
+app.get('/api/alertas-crisis', requiereLogin, async (req, res) => {
+  const { rows } = await query('SELECT * FROM alertas_crisis ORDER BY creado_en DESC LIMIT 20');
+  res.json(rows);
+});
+// Fuerza una evaluación ahora mismo (botón manual, ignora el cooldown)
+app.post('/api/alertas-crisis/evaluar', requiereLogin, async (req, res) => {
+  try {
+    const r = await evaluarCrisis(true);
+    res.json(r);
+  } catch (e) { console.error('Evaluar crisis:', e); res.status(500).json({ error: 'Error al evaluar: ' + e.message }); }
+});
+app.patch('/api/alertas-crisis/:id', requiereLogin, async (req, res) => {
+  await query('UPDATE alertas_crisis SET leida = true WHERE id = $1', [req.params.id]);
+  res.json({ ok: true });
+});
+app.get('/api/alertas-crisis/nuevas', requiereLogin, async (req, res) => {
+  const { rows } = await query('SELECT COUNT(*)::int AS n FROM alertas_crisis WHERE leida = false');
+  res.json({ nuevas: rows[0].n });
+});
+
+// ─── AMBIENTE EN MEDIOS (automático, de las alertas RSS clasificadas) ───
+app.get('/api/medios-ambiente', requiereLogin, async (req, res) => {
+  try {
+    const r = await ambienteMedios();
+    res.json(r);
+  } catch (e) { console.error('Ambiente medios:', e); res.status(500).json({ error: 'Error al calcular ambiente en medios.' }); }
 });
 
 
@@ -974,12 +1009,22 @@ inicializarBase()
       console.log(`✓ EMETRA SENTINELA backend corriendo en el puerto ${PORT}`);
       console.log(`  Prueba de salud: /api/health`);
     });
-    // Revisión automática de alertas cada hora (si el backend está despierto)
+    // Revisión automática cada hora (si el backend está despierto):
+    // 1) lee RSS nuevo, 2) clasifica cómo tratan los medios a tus entidades,
+    // 3) evalúa si hay señales de crisis y, si las hay, la IA redacta una alerta sola.
     setInterval(async () => {
       try {
         const r = await leerTodasLasAlertas();
         if (r.nuevas > 0) console.log(`[ALERTAS] ${r.nuevas} menciones nuevas de ${r.fuentes} fuentes`);
       } catch (e) { console.error('[ALERTAS] Error en revisión automática:', e.message); }
+      try {
+        const c = await clasificarAlertasPendientes();
+        if (c.clasificadas > 0) console.log(`[MEDIOS] ${c.clasificadas} notas de medios clasificadas`);
+      } catch (e) { console.error('[MEDIOS] Error clasificando:', e.message); }
+      try {
+        const cr = await evaluarCrisis(false);
+        if (cr.generada) console.log(`[CRISIS] Nueva alerta generada: ${cr.alerta.titulo}`);
+      } catch (e) { console.error('[CRISIS] Error evaluando:', e.message); }
     }, 60 * 60 * 1000); // cada 60 minutos
   })
   .catch((e) => {
