@@ -137,7 +137,8 @@ export async function procesarXlsx(buffer, { archivo, subidoPor }) {
     }
   }
 
-  // 3) Inserta cada registro con su clasificación
+  // 3) Prepara cada fila con su clasificación (todavía en memoria, sin tocar la BD)
+  const filasListas = [];
   for (let k = 0; k < registros.length; k++) {
     const r = registros[k];
     let sentimiento, confianza, dolor, zona, direccion = null, senalado = null;
@@ -162,17 +163,32 @@ export async function procesarXlsx(buffer, { archivo, subidoPor }) {
     }
     const esDudoso = confianza < UMBRAL_DUDOSO;
 
-    await pool.query(
-      `INSERT INTO menciones (carga_id, autor, profile_id, username, red, fecha, likes, texto, permalink, sentimiento, confianza, zona, dolor, followers, bio, ubicacion, verificado, direccion, senalado, emocion, tema_ia, intensidad, resumen)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
-      [cargaId, r.autor, r.profileId, r.username, red, r.fecha, r.likes, r.texto, r.permalink, sentimiento, confianza, zona, dolor, r.followers, r.bio, r.ubicacion, r.verificado, direccion, senalado, emocion, tema_ia, intensidad, resumen]
-    );
+    filasListas.push([cargaId, r.autor, r.profileId, r.username, red, r.fecha, r.likes, r.texto, r.permalink, sentimiento, confianza, zona, dolor, r.followers, r.bio, r.ubicacion, r.verificado, direccion, senalado, emocion, tema_ia, intensidad, resumen]);
 
     total++;
     if (sentimiento === 'positivo') positivos++;
     else if (sentimiento === 'negativo') negativos++;
     else neutros++;
     if (esDudoso) dudosos++;
+  }
+
+  // 4) Inserta en LOTES (100 filas por query) en vez de una query por comentario.
+  //    Con 1,000 comentarios esto son ~10 queries en vez de 1,000 — mucho más rápido.
+  const COLUMNAS = 23;
+  const LOTE_INSERT = 100;
+  for (let i = 0; i < filasListas.length; i += LOTE_INSERT) {
+    const lote = filasListas.slice(i, i + LOTE_INSERT);
+    const placeholders = lote.map((_, fi) => {
+      const base = fi * COLUMNAS;
+      const nums = Array.from({ length: COLUMNAS }, (_, ci) => `$${base + ci + 1}`);
+      return `(${nums.join(',')})`;
+    }).join(',');
+    const valores = lote.flat();
+    await pool.query(
+      `INSERT INTO menciones (carga_id, autor, profile_id, username, red, fecha, likes, texto, permalink, sentimiento, confianza, zona, dolor, followers, bio, ubicacion, verificado, direccion, senalado, emocion, tema_ia, intensidad, resumen)
+       VALUES ${placeholders}`,
+      valores
+    );
   }
 
   await pool.query(

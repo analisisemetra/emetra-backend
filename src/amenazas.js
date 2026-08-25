@@ -86,18 +86,33 @@ export async function analizarAmenazas() {
   }
 
   // ── Detección de SIMILITUD DE LENGUAJE ──
-  // Pares de cuentas distintas con texto casi idéntico
+  // Pares de cuentas distintas con texto casi idéntico.
+  // Optimización: solo comparamos comentarios del MISMO DÍA (los ataques
+  // coordinados ocurren en ventanas de tiempo cercanas, igual que la
+  // sincronía). Esto evita comparar TODO contra TODO cuando hay miles de
+  // comentarios acumulados de meses distintos — pasa de O(n²) global a
+  // O(n²) por día, que es mucho más chico y no crece sin límite.
   const lenguaje = [];
   const lenguajeCuenta = new Map();
-  const negs = menciones.filter(m => m.sentimiento === 'negativo' && norm(m.texto).length > 15);
-  for (let i = 0; i < negs.length; i++) {
-    for (let j = i + 1; j < negs.length; j++) {
-      if (negs[i].profile_id === negs[j].profile_id) continue;
-      const sim = similitud(negs[i].texto, negs[j].texto);
-      if (sim >= 0.6) {
-        lenguaje.push({ a: negs[i].autor, b: negs[j].autor, similitud: Math.round(sim * 100) });
-        lenguajeCuenta.set(negs[i].profile_id, Math.max(lenguajeCuenta.get(negs[i].profile_id) || 0, sim));
-        lenguajeCuenta.set(negs[j].profile_id, Math.max(lenguajeCuenta.get(negs[j].profile_id) || 0, sim));
+  const negsTodos = menciones.filter(m => m.sentimiento === 'negativo' && norm(m.texto).length > 15);
+  const negsPorDia = new Map();
+  for (const m of negsTodos) {
+    const dia = m.fecha ? new Date(m.fecha).toISOString().slice(0, 10) : 'sin-fecha';
+    if (!negsPorDia.has(dia)) negsPorDia.set(dia, []);
+    negsPorDia.get(dia).push(m);
+  }
+  const MAX_POR_DIA = 400; // tope de seguridad por si un solo día tiene un volumen enorme
+  for (const negs of negsPorDia.values()) {
+    const grupo = negs.length > MAX_POR_DIA ? negs.slice(0, MAX_POR_DIA) : negs;
+    for (let i = 0; i < grupo.length; i++) {
+      for (let j = i + 1; j < grupo.length; j++) {
+        if (grupo[i].profile_id === grupo[j].profile_id) continue;
+        const sim = similitud(grupo[i].texto, grupo[j].texto);
+        if (sim >= 0.6) {
+          lenguaje.push({ a: grupo[i].autor, b: grupo[j].autor, similitud: Math.round(sim * 100) });
+          lenguajeCuenta.set(grupo[i].profile_id, Math.max(lenguajeCuenta.get(grupo[i].profile_id) || 0, sim));
+          lenguajeCuenta.set(grupo[j].profile_id, Math.max(lenguajeCuenta.get(grupo[j].profile_id) || 0, sim));
+        }
       }
     }
   }

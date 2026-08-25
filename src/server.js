@@ -21,6 +21,21 @@ const subida = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 dotenv.config();
 const app = express();
 app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
+
+// ─── Caché simple en memoria para lecturas pesadas (Panorama, Estadísticas) ───
+// Estos endpoints hacen 5-6 queries agregadas sobre toda la tabla de menciones.
+// Los datos solo cambian cuando alguien sube comentarios, reanaliza, o registra
+// sentimiento/credibilidad/proyectos/noticias manualmente — no en cada vista.
+// Por eso cacheamos 5 minutos y invalidamos al instante cuando algo cambia.
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutos
+const cache = {};
+function cacheGet(clave) {
+  const e = cache[clave];
+  if (e && Date.now() - e.ts < CACHE_TTL_MS) return e.data;
+  return null;
+}
+function cacheSet(clave, data) { cache[clave] = { data, ts: Date.now() }; }
+function invalidarCache() { for (const k in cache) delete cache[k]; }
 app.use(express.json());
 
 // Ayudante: registra una acción en la auditoría.
@@ -336,6 +351,7 @@ app.post('/api/cargar', requiereLogin, requierePermiso('decisiones'), subida.sin
       subidoPor: req.usuario.usuario,
     });
     await auditar('[CARGA]', `${req.usuario.usuario} subió ${resumen.archivo}: ${resumen.total} comentarios (${resumen.dudosos} por revisar)`, req.usuario.usuario);
+    invalidarCache(); // los datos cambiaron: Panorama y Estadísticas deben recalcularse
     res.json(resumen);
   } catch (e) {
     console.error(e);
@@ -370,6 +386,7 @@ app.post('/api/metricas', requiereLogin, requierePermiso('decisiones'), subida.s
   try {
     const resumen = await procesarMetricas(req.file.buffer);
     await auditar('[METRICAS]', `${req.usuario.usuario} subió métricas: ${resumen.publicaciones} pubs, ${resumen.credibilidad} cred, ${resumen.zonas} zonas`, req.usuario.usuario);
+    invalidarCache();
     res.json(resumen);
   } catch (e) {
     console.error(e);
@@ -379,6 +396,9 @@ app.post('/api/metricas', requiereLogin, requierePermiso('decisiones'), subida.s
 
 // Datos para PANORAMA: combina comentarios (sentimiento) + publicaciones (alcance)
 app.get('/api/panorama', requiereLogin, async (req, res) => {
+  const cacheado = cacheGet('panorama');
+  if (cacheado) return res.json(cacheado);
+
   const sent = await query(`SELECT sentimiento, COUNT(*)::int AS n FROM menciones GROUP BY sentimiento`);
   const totalCom = await query(`SELECT COUNT(*)::int AS n FROM menciones`);
   const pubs = await query(`SELECT COUNT(*)::int AS posts, COALESCE(SUM(alcance),0)::bigint AS alcance, COALESCE(SUM(plays),0)::bigint AS plays, COALESCE(SUM(likes+comentarios+compartidos),0)::bigint AS interacciones FROM publicaciones`);
@@ -391,7 +411,7 @@ app.get('/api/panorama', requiereLogin, async (req, res) => {
   const s = { positivo: 0, negativo: 0, neutro: 0 };
   sent.rows.forEach(r => { s[r.sentimiento] = r.n; });
   const tot = s.positivo + s.negativo + s.neutro || 1;
-  res.json({
+  const resultado = {
     totalComentarios: totalCom.rows[0].n,
     totalPosts: pubs.rows[0].posts,
     alcanceTotal: Number(pubs.rows[0].alcance),
@@ -406,7 +426,9 @@ app.get('/api/panorama', requiereLogin, async (req, res) => {
     porTema: porTema.rows.map(r => ({ tema: r.tema, posts: r.posts, alcance: Number(r.alcance) })),
     porRed: porRed.rows.map(r => ({ red: r.red, posts: r.posts, plays: Number(r.plays), alcance: Number(r.alcance) })),
     frases,
-  });
+  };
+  cacheSet('panorama', resultado);
+  res.json(resultado);
 });
 
 // Calcula frases/palabras recurrentes (bigramas) en una lista de textos
@@ -575,6 +597,7 @@ app.post('/api/reanalizar', requiereLogin, requierePermiso('decisiones'), async 
       }
     }
     await auditar('[REANÁLISIS]', `${req.usuario.usuario} reanalizó ${procesados} comentarios con IA`, req.usuario.usuario);
+    invalidarCache();
     res.json({ ok: true, total: procesados });
   } catch (e) { console.error('Reanalizar:', e); res.status(500).json({ error: 'Error al reanalizar: ' + e.message }); }
 });
@@ -621,6 +644,9 @@ app.get('/api/dashboard-sentimientos', requiereLogin, async (req, res) => {  con
 });
 
 app.get('/api/estadisticas', requiereLogin, async (req, res) => {
+  const cacheado = cacheGet('estadisticas');
+  if (cacheado) return res.json(cacheado);
+
   // Alcance vs recepción por tema (de publicaciones)
   const porTema = await query(`SELECT tema, COUNT(*)::int AS posts, COALESCE(SUM(alcance),0)::bigint AS alcance, COALESCE(SUM(likes+comentarios+compartidos),0)::bigint AS interacciones FROM publicaciones WHERE tema <> '' GROUP BY tema ORDER BY alcance DESC`);
   // Radar de crisis: menciones por día (de los comentarios reales, por fecha)
@@ -660,14 +686,16 @@ app.get('/api/estadisticas', requiereLogin, async (req, res) => {
     semanal = sw.rows;
   }
 
-  res.json({
+  const resultado = {
     porTema: porTema.rows.map(r => ({ tema: r.tema, posts: r.posts, alcance: Number(r.alcance), interacciones: Number(r.interacciones) })),
     crisis: crisis.rows.map(r => ({ fecha: r.fecha, menciones: r.menciones })),
     plataformas: plataformas.rows.map(r => ({ red: r.red, alcance: Number(r.alcance_real), alcanceReal: Number(r.alcance), plays: Number(r.plays), posts: r.posts })),
     dolores,
     sentTema,
     semanal,
-  });
+  };
+  cacheSet('estadisticas', resultado);
+  res.json(resultado);
 });
 
 // Agrupa el sentimiento por categoría de dolor (mismas categorías que agruparDolores)
@@ -927,6 +955,7 @@ app.patch('/api/menciones/:id', requiereLogin, requierePermiso('decisiones'), as
     [sentimiento, req.params.id]
   );
   await auditar('[REVISION]', `${req.usuario.usuario} ajustó un comentario a ${sentimiento}`, req.usuario.usuario);
+  invalidarCache();
   res.json({ ok: true });
 });
 
