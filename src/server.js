@@ -15,6 +15,7 @@ import { generarResumenEjecutivo } from './resumen-ejecutivo.js';
 import { leerTodasLasAlertas } from './leer-alertas.js';
 import { clasificarAlertasPendientes, ambienteMedios } from './clasificador-medios.js';
 import { evaluarCrisis } from './alertas-crisis.js';
+import { categoriaDe, mapaCategorias } from './categorias-dolor.js';
 import { analizarAmenazas } from './amenazas.js';
 
 // Recibe archivos en memoria (hasta 10 MB), sin guardarlos en disco.
@@ -702,74 +703,27 @@ app.get('/api/estadisticas', requiereLogin, async (req, res) => {
 
 // Agrupa el sentimiento por categoría de dolor (mismas categorías que agruparDolores)
 function agruparSentTema(filas) {
-  const norm = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  const CATEGORIAS = [
-    ['Motos en banqueta', ['banqueta', 'acera', 'motociclistas en']],
-    ['Multas injustas / abusivas', ['multa injusta', 'multas injusta', 'multa abusiva', 'multas abusiva', 'excesiva', 'extorsion', 'solo multa', 'recaudacion', 'fantasma', 'falsa']],
-    ['Corrupción / mordida', ['corrupc', 'corrupto', 'mordida', 'coima', 'soborno', 'malversacion', 'enriquecimiento']],
-    ['Falta de operativos', ['falta de operativo', 'insuficiente', 'no hacen nada', 'inaccion', 'no estan', 'donde estan']],
-    ['Cepos / inmovilizadores', ['cepo', 'inmovilizador', 'garra', 'arana']],
-    ['Congestión / tráfico', ['trafico', 'congestion', 'tranque', 'embotellamiento', 'caos']],
-    ['Transporte público', ['transporte publico', 'transmetro', 'transurbano', 'bus rojo', 'camioneta', 'piloto']],
-    ['Taxis / transporte pirata', ['taxi pirata', 'pirata']],
-    ['Licencias', ['licencia']],
-    ['Educación vial', ['educacion vial', 'cultura vial']],
-    ['Semáforos / señalización', ['semaforo', 'senalizacion', 'senal']],
-    ['Parqueo indebido', ['apartan parqueo', 'aparta parqueo', 'apartaparqueo', 'estacionamiento irregular', 'mal parqueo', 'parqueo informal', 'ocupan parqueo']],
-    ['Ventas / obstáculos en vía', ['venta informal', 'venta de licencia', 'vendedores', 'obstaculo', 'apartadores']],
-    ['Doble moral / oficiales', ['doble moral', 'vehiculo oficial', 'doble estandar', 'favoritismo', 'arrogancia']],
-    ['Infraestructura vial', ['infraestructura', 'baches', 'mal estado', 'carreteras', 'mantenimiento']],
-    ['Accidentes / seguridad', ['accidente', 'choque', 'atropell', 'muerte', 'ebrio', 'alcohol']],
-  ];
   const acum = {};
   for (const f of filas) {
-    const t = norm(f.dolor);
-    for (const [nombre, claves] of CATEGORIAS) {
-      if (claves.some(k => t.includes(norm(k)))) {
-        if (!acum[nombre]) acum[nombre] = { tema: nombre, positivos: 0, negativos: 0, neutros: 0 };
-        acum[nombre].positivos += f.positivos;
-        acum[nombre].negativos += f.negativos;
-        acum[nombre].neutros += f.neutros;
-        break;
-      }
-    }
+    const nombre = categoriaDe(f.dolor);
+    if (!nombre) continue;
+    if (!acum[nombre]) acum[nombre] = { tema: nombre, positivos: 0, negativos: 0, neutros: 0 };
+    acum[nombre].positivos += f.positivos;
+    acum[nombre].negativos += f.negativos;
+    acum[nombre].neutros += f.neutros;
   }
   return Object.values(acum)
     .sort((a, b) => (b.positivos + b.negativos + b.neutros) - (a.positivos + a.negativos + a.neutros))
     .slice(0, 10);
 }
 
-// Agrupa dolores específicos en categorías amplias por palabras clave.
+// Agrupa dolores específicos en categorías amplias (usa la lista maestra de categorias-dolor.js).
 // Devuelve el top 15 con su categoría canónica.
 function agruparDolores(filas) {
-  const norm = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  // categoría canónica → palabras que la activan (orden importa: la primera que coincide gana)
-  const CATEGORIAS = [
-    ['Motos en banqueta', ['banqueta', 'acera', 'moto en la', 'motos en la', 'motociclistas en']],
-    ['Multas injustas / abusivas', ['multa injusta', 'multas injusta', 'multa abusiva', 'multas abusiva', 'multas excesiva', 'multa excesiva', 'extorsion', 'solo multa', 'solo cobr', 'recaudacion', 'multas falsas', 'multa falsa', 'multas fantasma']],
-    ['Corrupción / mordida', ['corrupc', 'corrupto', 'mordida', 'coima', 'soborno', 'malversacion', 'enriquecimiento']],
-    ['Falta de operativos', ['falta de operativo', 'operativos insuficiente', 'no hacen nada', 'no hay operativo', 'inaccion', 'falta de accion', 'no estan', 'donde estan']],
-    ['Cepos / inmovilizadores', ['cepo', 'inmovilizador', 'garra', 'arana']],
-    ['Congestión / tráfico', ['trafico', 'congestion', 'tranque', 'embotellamiento', 'no avanza', 'caos vial', 'caos vehicular']],
-    ['Transporte público', ['transporte publico', 'transmetro', 'transurbano', 'bus rojo', 'buses rojo', 'camioneta', 'pilotos de bus', 'piloto de bus']],
-    ['Taxis / transporte pirata', ['taxi pirata', 'taxis pirata', 'pirata']],
-    ['Licencias', ['licencia']],
-    ['Educación vial', ['educacion vial', 'cultura vial']],
-    ['Semáforos / señalización', ['semaforo', 'senalizacion', 'senales', 'senal vial']],
-    ['Vehículos / vendedores que apartan parqueo', ['apartan parqueo', 'aparta parqueo', 'apartaparqueo', 'aparta-parqueo', 'estacionamiento irregular', 'mal parqueo', 'parqueo informal', 'ocupan parqueo']],
-    ['Ventas / obstáculos en vía pública', ['venta informal', 'ventas informal', 'venta de licencia', 'vendedores', 'obstaculo', 'obstaculos', 'via publica ocupada', 'apartadores']],
-    ['Doble moral / vehículos oficiales', ['doble moral', 'vehiculo oficial', 'vehiculos oficiale', 'doble estandar', 'ellos si pueden', 'favoritismo', 'arrogancia']],
-    ['Infraestructura vial', ['infraestructura', 'baches', 'calles en mal estado', 'mal estado de calle', 'carreteras en mal', 'sin reparacion', 'mantenimiento vial']],
-    ['Accidentes / seguridad vial', ['accidente', 'choque', 'atropell', 'muerte', 'muertos', 'conductores ebrios', 'alcohol al volante', 'ebrio']],
-  ];
   const acum = {};
   let otros = 0;
   for (const f of filas) {
-    const t = norm(f.dolor);
-    let cat = null;
-    for (const [nombre, claves] of CATEGORIAS) {
-      if (claves.some(k => t.includes(norm(k)))) { cat = nombre; break; }
-    }
+    const cat = categoriaDe(f.dolor);
     if (cat) acum[cat] = (acum[cat] || 0) + f.n;
     else otros += f.n;
   }
@@ -785,26 +739,7 @@ function agruparDolores(filas) {
 app.get('/api/dolor-comentarios', requiereLogin, async (req, res) => {
   const cat = String(req.query.cat || '').trim();
   if (!cat) return res.json([]);
-  // mismo mapa de categorías → palabras clave (coincide con agruparDolores)
-  const MAPA = {
-    'Motos en banqueta': ['banqueta', 'acera', 'motociclistas en'],
-    'Multas injustas / abusivas': ['multa injusta', 'multas injusta', 'multa abusiva', 'multas abusiva', 'excesiva', 'extorsion', 'solo multa', 'recaudacion', 'fantasma', 'falsa'],
-    'Corrupción / mordida': ['corrupc', 'corrupto', 'mordida', 'coima', 'soborno', 'malversacion', 'enriquecimiento'],
-    'Falta de operativos': ['falta de operativo', 'insuficiente', 'no hacen nada', 'inaccion', 'no estan', 'donde estan'],
-    'Cepos / inmovilizadores': ['cepo', 'inmovilizador', 'garra', 'arana'],
-    'Congestión / tráfico': ['trafico', 'congestion', 'tranque', 'embotellamiento', 'caos'],
-    'Transporte público': ['transporte publico', 'transmetro', 'transurbano', 'bus rojo', 'camioneta', 'piloto'],
-    'Taxis / transporte pirata': ['taxi pirata', 'pirata'],
-    'Licencias': ['licencia'],
-    'Educación vial': ['educacion vial', 'cultura vial'],
-    'Semáforos / señalización': ['semaforo', 'senalizacion', 'senal'],
-    'Vehículos / vendedores que apartan parqueo': ['apartan parqueo', 'aparta parqueo', 'apartaparqueo', 'estacionamiento irregular', 'mal parqueo', 'parqueo informal', 'ocupan parqueo'],
-    'Ventas / obstáculos en vía pública': ['venta informal', 'venta de licencia', 'vendedores', 'obstaculo', 'apartadores'],
-    'Doble moral / vehículos oficiales': ['doble moral', 'vehiculo oficial', 'doble estandar', 'favoritismo', 'arrogancia'],
-    'Infraestructura vial': ['infraestructura', 'baches', 'mal estado', 'carreteras', 'mantenimiento'],
-    'Accidentes / seguridad vial': ['accidente', 'choque', 'atropell', 'muerte', 'ebrio', 'alcohol'],
-  };
-  const claves = MAPA[cat];
+  const claves = mapaCategorias()[cat];
   if (!claves) return res.json([]);
   const params = claves.map(k => `%${k}%`);
   let rows;
@@ -864,14 +799,7 @@ app.get('/api/amenazas', requiereLogin, async (req, res) => {
 // Denuncias ciudadanas — generadas automáticamente de los comentarios
 // (comentarios negativos que mencionan una zona o dirección concreta)
 app.get('/api/denuncias', requiereLogin, async (req, res) => {
-  const { rows } = await query(`
-    SELECT id, fecha, zona, direccion, dolor AS tipo, senalado, texto AS descripcion, sentimiento, autor, red, permalink
-    FROM menciones
-    WHERE sentimiento='negativo'
-      AND (zona IS NOT NULL OR direccion IS NOT NULL OR dolor IS NOT NULL)
-    ORDER BY fecha DESC NULLS LAST
-    LIMIT 200`);
-  res.json(rows.map(r => ({
+  const mapear = r => ({
     id: r.id,
     fecha: r.fecha,
     zona: r.zona || (r.direccion ? '—' : 'Sin zona'),
@@ -883,7 +811,25 @@ app.get('/api/denuncias', requiereLogin, async (req, res) => {
     red: r.red,
     enlace: r.permalink,
     estado: 'Pendiente',
-  })));
+  });
+  const WHERE = `sentimiento='negativo' AND (zona IS NOT NULL OR direccion IS NOT NULL OR dolor IS NOT NULL)`;
+  // Sin ?pagina=: comportamiento de siempre (primeras 200, arreglo plano) — no rompe nada existente.
+  if (!req.query.pagina) {
+    const { rows } = await query(`
+      SELECT id, fecha, zona, direccion, dolor AS tipo, senalado, texto AS descripcion, sentimiento, autor, red, permalink
+      FROM menciones WHERE ${WHERE} ORDER BY fecha DESC NULLS LAST LIMIT 200`);
+    return res.json(rows.map(mapear));
+  }
+  // Con ?pagina=: paginación real, para cuando haya más de 200 y quieras ver el resto.
+  const pagina = Math.max(1, parseInt(req.query.pagina) || 1);
+  const limite = Math.min(parseInt(req.query.limite) || 50, 200);
+  const offset = (pagina - 1) * limite;
+  const { rows } = await query(`
+    SELECT id, fecha, zona, direccion, dolor AS tipo, senalado, texto AS descripcion, sentimiento, autor, red, permalink
+    FROM menciones WHERE ${WHERE} ORDER BY fecha DESC NULLS LAST LIMIT $1 OFFSET $2`, [limite, offset]);
+  const { rows: totalRows } = await query(`SELECT COUNT(*)::int AS n FROM menciones WHERE ${WHERE}`);
+  const total = totalRows[0].n;
+  res.json({ datos: rows.map(mapear), total, pagina, paginas: Math.max(1, Math.ceil(total / limite)) });
 });
 
 // Proyectos con métricas (de la plantilla)
@@ -925,8 +871,18 @@ app.post('/api/alertas/refrescar', requiereLogin, async (req, res) => {
 });
 // Listar menciones detectadas (más recientes primero)
 app.get('/api/alertas', requiereLogin, async (req, res) => {
-  const { rows } = await query('SELECT * FROM menciones_alertas ORDER BY publicado DESC NULLS LAST, creado_en DESC LIMIT 100');
-  res.json(rows);
+  // Sin ?pagina=: comportamiento de siempre (arreglo plano) — lo usan el ticker y la carga inicial.
+  if (!req.query.pagina) {
+    const { rows } = await query('SELECT * FROM menciones_alertas ORDER BY publicado DESC NULLS LAST, creado_en DESC LIMIT 100');
+    return res.json(rows);
+  }
+  const pagina = Math.max(1, parseInt(req.query.pagina) || 1);
+  const limite = Math.min(parseInt(req.query.limite) || 50, 200);
+  const offset = (pagina - 1) * limite;
+  const { rows } = await query('SELECT * FROM menciones_alertas ORDER BY publicado DESC NULLS LAST, creado_en DESC LIMIT $1 OFFSET $2', [limite, offset]);
+  const { rows: totalRows } = await query('SELECT COUNT(*)::int AS n FROM menciones_alertas');
+  const total = totalRows[0].n;
+  res.json({ datos: rows, total, pagina, paginas: Math.max(1, Math.ceil(total / limite)) });
 });
 // Cuántas no leídas
 app.get('/api/alertas/nuevas', requiereLogin, async (req, res) => {

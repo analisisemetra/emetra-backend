@@ -21,6 +21,7 @@ async function clasificarLote(textos) {
 
 Para cada comentario devuelve EXACTAMENTE estos campos:
 - sentimiento: "positivo" (apoya/felicita/agradece), "negativo" (critica/ataca/se queja con molestia), o "neutro" (pregunta/comenta/informa sin carga emocional)
+- confianza: qué tan seguro estás de tu clasificación de sentimiento, de 0.0 a 1.0. Usa 0.9-1.0 si es claro y sin ambigüedad. Usa 0.5-0.75 si el comentario es corto, ambiguo, sarcástico difícil de leer, o mezcla tonos. Usa menos de 0.5 si de verdad no puedes decidir.
 - emocion: la emoción dominante. Una de: "enojo", "frustracion", "satisfaccion", "gratitud", "confusion", "indiferencia", "tristeza", "preocupacion", "burla" (sarcasmo/mofa), "exigencia" (reclamo o demanda de acción)
 - tema: el tema principal de tránsito. Uno de: "operativos", "multas", "licencias", "motos en banqueta", "corrupcion", "trafico", "transporte publico", "educacion vial", "semaforos", "parqueo", "accidentes", "infraestructura", "atencion ciudadana", "otro"
 - intensidad: qué tan fuerte es la emoción, del 1 (muy leve) al 5 (muy intenso)
@@ -36,12 +37,13 @@ Reglas de criterio:
 - El sarcasmo como "solo cuando hay cámaras 🤣" es crítica (negativo, emocion burla, postura critico).
 - "Felicito", "buen trabajo", "gracias" → positivo, emocion gratitud o satisfaccion.
 - Lee el comentario completo antes de decidir; no te quedes con una palabra suelta.
+- Sé honesto con la confianza: si el comentario es genuinamente difícil de leer, dilo con un número bajo — eso hace que un humano lo revise, lo cual es mejor que adivinar con falsa seguridad.
 
 Comentarios:
 ${lista}
 
 Responde SOLO con un arreglo JSON válido, sin texto adicional ni markdown. Formato exacto:
-[{"sentimiento":"...","emocion":"...","tema":"...","intensidad":3,"resumen":"...","dolor":"..." o null,"postura":"...","zona":"..." o null,"direccion":"..." o null,"senalado":"..." o null}, ...]
+[{"sentimiento":"...","confianza":0.9,"emocion":"...","tema":"...","intensidad":3,"resumen":"...","dolor":"..." o null,"postura":"...","zona":"..." o null,"direccion":"..." o null,"senalado":"..." o null}, ...]
 Un objeto por comentario, en el mismo orden.`;
 
   const resp = await fetch(API_URL, {
@@ -84,9 +86,12 @@ export async function clasificarConIA(textos) {
         const EMOCIONES = ['enojo','frustracion','satisfaccion','gratitud','confusion','indiferencia','tristeza','preocupacion','burla','exigencia'];
         const TEMAS = ['operativos','multas','licencias','motos en banqueta','corrupcion','trafico','transporte publico','educacion vial','semaforos','parqueo','accidentes','infraestructura','atencion ciudadana','otro'];
         let inten = parseInt(c.intensidad); if (isNaN(inten) || inten < 1 || inten > 5) inten = 3;
+        // confianza real que reporta la IA (no un valor fijo) — si no viene o es inválida, usa un valor conservador
+        let conf = parseFloat(c.confianza);
+        if (isNaN(conf) || conf < 0 || conf > 1) conf = 0.75;
         resultados.push({
           sentimiento: ['positivo', 'negativo', 'neutro'].includes(c.sentimiento) ? c.sentimiento : 'neutro',
-          confianza: 0.9,
+          confianza: conf,
           emocion: EMOCIONES.includes(c.emocion) ? c.emocion : 'indiferencia',
           tema: TEMAS.includes(c.tema) ? c.tema : 'otro',
           intensidad: inten,
