@@ -15,7 +15,11 @@ async function clasificarLote(items) {
   const lista = items.map((it, i) => `${i + 1}. "${it.titulo}"${it.resumen ? ' — ' + String(it.resumen).slice(0, 200) : ''}`).join('\n');
   const prompt = `Eres analista de medios para EMETRA/PMT (tránsito de Ciudad de Guatemala). Para cada titular/resumen de noticia, clasifica cómo trata a EMETRA, la PMT, o sus funcionarios (Héctor Flores, Montejo, etc.).
 
-- postura: "favor" (cobertura positiva, destaca logros), "contra" (crítica, denuncia, señala fallas), o "neutral" (informativa, sin juicio, o no menciona directamente a estas entidades)
+- postura: una de estas 4:
+  · "favor" — cobertura positiva/elogiosa, destaca logros o buen trabajo, con juicio favorable propio del medio.
+  · "informativo_propio" — la noticia es informativa (reporta un hecho: un accidente, un operativo, un comunicado) y está citando o basada en algo que EMETRA/PMT publicó en sus propias redes sociales o comunicó oficialmente. IMPORTANTE: esto cuenta como BUENO aunque el tema sea serio (un accidente, un hecho de tránsito) — significa que tu mensaje llegó al medio. Señales de esto: "según informó EMETRA...", "de acuerdo a la PMT...", "publicó en su cuenta...", "confirmó la institución...".
+  · "contra" — crítica, denuncia, señala fallas, corrupción, o cuestiona a la institución.
+  · "neutral" — informativa pero SIN relación con contenido propio de tus redes (el medio lo reportó por su cuenta, no citándote), o menciona a las entidades de pasada sin juicio.
 - motivo: por qué, en máximo 8 palabras
 
 Noticias:
@@ -51,7 +55,7 @@ export async function clasificarAlertasPendientes() {
       const resultados = await clasificarLote(grupo);
       for (let j = 0; j < grupo.length; j++) {
         const r = resultados[j] || {};
-        const postura = ['favor', 'contra', 'neutral'].includes(r.postura) ? r.postura : 'neutral';
+        const postura = ['favor', 'contra', 'neutral', 'informativo_propio'].includes(r.postura) ? r.postura : 'neutral';
         await pool.query(
           `UPDATE menciones_alertas SET sentimiento_medio=$1, motivo_medio=$2 WHERE id=$3`,
           [postura, (r.motivo || '').slice(0, 150), grupo[j].id]
@@ -76,9 +80,12 @@ export async function clasificarAlertasPendientes() {
     );
     const total = recientes.length || 1;
     const favor = recientes.filter(r => r.sentimiento_medio === 'favor').length;
+    const informativo = recientes.filter(r => r.sentimiento_medio === 'informativo_propio').length;
     const contra = recientes.filter(r => r.sentimiento_medio === 'contra').length;
+    // Para la postura general del actor (favor/contra/neutral, usada en el resto de Actores):
+    // "informativo_propio" cuenta hacia favor — es cobertura de tu propio contenido, aunque el tema sea serio.
     let posturaAgregada = 'neutral';
-    if (favor / total >= 0.5) posturaAgregada = 'favor';
+    if ((favor + informativo) / total >= 0.5) posturaAgregada = 'favor';
     else if (contra / total >= 0.5) posturaAgregada = 'contra';
 
     const existe = await pool.query(`SELECT id FROM actores WHERE lower(nombre) = lower($1) LIMIT 1`, [m.fuente_nombre]);
@@ -101,6 +108,7 @@ export async function ambienteMedios() {
     SELECT fuente_nombre,
            COUNT(*)::int AS total,
            SUM(CASE WHEN sentimiento_medio='favor' THEN 1 ELSE 0 END)::int AS favor,
+           SUM(CASE WHEN sentimiento_medio='informativo_propio' THEN 1 ELSE 0 END)::int AS informativo,
            SUM(CASE WHEN sentimiento_medio='contra' THEN 1 ELSE 0 END)::int AS contra,
            SUM(CASE WHEN sentimiento_medio='neutral' THEN 1 ELSE 0 END)::int AS neutral,
            MAX(publicado) AS ultima
@@ -111,10 +119,38 @@ export async function ambienteMedios() {
   return rows.map(r => {
     const tot = r.total || 1;
     const pctFavor = Math.round(r.favor / tot * 100);
+    const pctInformativo = Math.round(r.informativo / tot * 100);
     const pctContra = Math.round(r.contra / tot * 100);
+    const pctNeutral = Math.round(r.neutral / tot * 100);
+    // La postura general cuenta "informativo_propio" junto con "favor" (ambos son buenos para ti)
     let postura = 'neutral';
-    if (r.favor / tot >= 0.5) postura = 'favor';
+    if ((r.favor + r.informativo) / tot >= 0.5) postura = 'favor';
     else if (r.contra / tot >= 0.5) postura = 'contra';
-    return { medio: r.fuente_nombre, total: r.total, favor: r.favor, contra: r.contra, neutral: r.neutral, pctFavor, pctContra, postura, ultima: r.ultima };
+    return {
+      medio: r.fuente_nombre, total: r.total,
+      favor: r.favor, informativo: r.informativo, contra: r.contra, neutral: r.neutral,
+      pctFavor, pctInformativo, pctContra, pctNeutral,
+      postura, ultima: r.ultima,
+    };
   });
+}
+
+// Estadística agregada (no por medio) de todas las noticias clasificadas — para el panel de Alertas
+export async function sentimientoNoticias() {
+  const { rows } = await pool.query(`
+    SELECT
+      SUM(CASE WHEN sentimiento_medio='favor' THEN 1 ELSE 0 END)::int AS favor,
+      SUM(CASE WHEN sentimiento_medio='informativo_propio' THEN 1 ELSE 0 END)::int AS informativo,
+      SUM(CASE WHEN sentimiento_medio='contra' THEN 1 ELSE 0 END)::int AS contra,
+      SUM(CASE WHEN sentimiento_medio='neutral' THEN 1 ELSE 0 END)::int AS neutral,
+      COUNT(*)::int AS total
+    FROM menciones_alertas WHERE sentimiento_medio IS NOT NULL`);
+  const r = rows[0];
+  return {
+    total: r.total || 0,
+    favor: r.favor || 0,
+    informativo: r.informativo || 0,
+    contra: r.contra || 0,
+    neutral: r.neutral || 0,
+  };
 }

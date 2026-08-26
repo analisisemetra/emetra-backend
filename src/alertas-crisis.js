@@ -99,30 +99,29 @@ export async function evaluarCrisis(forzar = false) {
     // sin IA disponible: guarda una alerta básica con los datos crudos, sin redacción
     const tipo = senales[0].tipo;
     const { rows } = await pool.query(
-      `INSERT INTO alertas_crisis (tipo, severidad, titulo, explicacion, recomendacion) VALUES ($1,'media',$2,$3,$4) RETURNING *`,
-      [tipo, 'Señal detectada: ' + tipo, senales.map(s => s.dato).join(' '), 'Revisa el panel para más detalle.']
+      `INSERT INTO alertas_crisis (tipo, severidad, titulo, explicacion) VALUES ($1,'media',$2,$3) RETURNING *`,
+      [tipo, 'Señal detectada: ' + tipo, senales.map(s => s.dato).join(' ')]
     );
     return { generada: true, alerta: rows[0] };
   }
 
-  // Le pide a la IA que redacte la alerta con las señales activas
+  // Le pide a la IA que redacte la alerta con las señales activas (solo QUÉ está pasando, sin sugerir qué hacer)
   const prompt = `Eres el sistema de vigilancia automática de EMETRA/PMT (tránsito de Ciudad de Guatemala). Se detectaron estas señales en la conversación pública de las últimas horas:
 
 ${senales.map((s, i) => `${i + 1}. [${s.tipo}] ${s.dato}`).join('\n')}
 
-Redacta una alerta ejecutiva breve y clara. Responde SOLO con este JSON:
+Redacta una alerta ejecutiva breve y clara que explique QUÉ está pasando. No sugieras qué hacer ni des recomendaciones — solo describe la situación con los datos. Responde SOLO con este JSON:
 {
   "severidad": "media" | "alta" | "critica",
   "titulo": "una frase que resuma la alerta (máximo 12 palabras)",
-  "explicacion": "2-3 frases explicando qué está pasando y por qué importa",
-  "recomendacion": "una acción concreta e inmediata a tomar"
+  "explicacion": "2-3 frases explicando qué está pasando y por qué importa, con los datos concretos"
 }
 Sé directo, sin relleno. Si hay señal de "coordinado", trata la alerta como más seria (alta o critica).`;
 
   const resp = await fetch(API_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model: MODELO, max_tokens: 500, messages: [{ role: 'user', content: prompt }] }),
+    body: JSON.stringify({ model: MODELO, max_tokens: 400, messages: [{ role: 'user', content: prompt }] }),
   });
   if (!resp.ok) throw new Error(`API Anthropic respondió ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
   const data = await resp.json();
@@ -130,8 +129,8 @@ Sé directo, sin relleno. Si hay señal de "coordinado", trata la alerta como m�
   const redactada = JSON.parse(txt);
 
   const { rows } = await pool.query(
-    `INSERT INTO alertas_crisis (tipo, severidad, titulo, explicacion, recomendacion) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-    [senales.map(s => s.tipo).join('+'), redactada.severidad || 'media', redactada.titulo, redactada.explicacion, redactada.recomendacion]
+    `INSERT INTO alertas_crisis (tipo, severidad, titulo, explicacion) VALUES ($1,$2,$3,$4) RETURNING *`,
+    [senales.map(s => s.tipo).join('+'), redactada.severidad || 'media', redactada.titulo, redactada.explicacion]
   );
   return { generada: true, alerta: rows[0] };
 }

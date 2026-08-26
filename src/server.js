@@ -13,7 +13,7 @@ import { procesarMetricas } from './procesar-metricas.js';
 import { hayApiKey, clasificarConIA } from './clasificador-ia.js';
 import { generarResumenEjecutivo } from './resumen-ejecutivo.js';
 import { leerTodasLasAlertas } from './leer-alertas.js';
-import { clasificarAlertasPendientes, ambienteMedios } from './clasificador-medios.js';
+import { clasificarAlertasPendientes, ambienteMedios, sentimientoNoticias } from './clasificador-medios.js';
 import { evaluarCrisis } from './alertas-crisis.js';
 import { categoriaDe, mapaCategorias } from './categorias-dolor.js';
 import { analizarAmenazas } from './amenazas.js';
@@ -922,6 +922,13 @@ app.get('/api/medios-ambiente', requiereLogin, async (req, res) => {
     const r = await ambienteMedios();
     res.json(r);
   } catch (e) { console.error('Ambiente medios:', e); res.status(500).json({ error: 'Error al calcular ambiente en medios.' }); }
+});
+// Sentimiento agregado de TODAS las noticias (para el panel dentro de Alertas)
+app.get('/api/alertas-sentimiento', requiereLogin, async (req, res) => {
+  try {
+    const r = await sentimientoNoticias();
+    res.json(r);
+  } catch (e) { console.error('Sentimiento noticias:', e); res.status(500).json({ error: 'Error al calcular el sentimiento de noticias.' }); }
 });
 
 

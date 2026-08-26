@@ -86,22 +86,21 @@ function construirPrompt(ctx) {
   if (ctx.alertas.length) lineas.push(`Noticias/menciones en medios recientes: ${ctx.alertas.map(a => a.titulo).join('; ')}`);
   if (ctx.credibilidad.length) lineas.push(`Credibilidad actual: ${ctx.credibilidad.map(c => `${c.entidad}: ${c.puntaje}/100`).join(', ')}`);
 
-  return `Eres el analista de inteligencia mediática de confianza del Gerente General de EMETRA (tránsito de Ciudad de Guatemala). Con los datos de abajo, redacta un RESUMEN EJECUTIVO que él pueda leer en 1 minuto y saber cómo está la reputación de la institución y qué debe hacer.
+  return `Eres el analista de inteligencia mediática de confianza del Gerente General de EMETRA (tránsito de Ciudad de Guatemala). Con los datos de abajo, redacta un RESUMEN EJECUTIVO que él pueda leer en 1 minuto y saber cómo está la reputación de la institución.
 
 DATOS ACTUALES:
 ${lineas.join('\n')}
 
-Redacta el resumen en español, tono profesional y directo (sin rodeos ni palabras de relleno). Estructura EXACTA en JSON:
+Redacta el resumen en español, tono profesional y directo (sin rodeos ni palabras de relleno). Este resumen es solo ANÁLISIS de lo que está pasando — NO sugieras qué hacer ni des consejos ni recomendaciones de acción; eso lo decide el Gerente General con estos datos. Estructura EXACTA en JSON:
 {
   "titular": "una frase que capture el estado general (máximo 15 palabras)",
   "panorama": "2-3 frases sobre qué está pasando en la conversación pública",
   "preocupaciones": ["3 a 5 focos rojos concretos, cada uno una frase con el dato que lo respalda"],
   "positivo": ["1 a 3 cosas que están funcionando bien"],
-  "recomendaciones": ["3 a 5 acciones concretas y accionables para esta semana, priorizadas"],
   "nivel_riesgo": "bajo" | "medio" | "alto"
 }
 
-Sé específico: usa los números y zonas reales. Las recomendaciones deben ser acciones que EMETRA pueda ejecutar (no genéricas). Responde SOLO con el JSON, sin markdown ni texto adicional.`;
+Sé específico: usa los números y zonas reales. Responde SOLO con el JSON, sin markdown ni texto adicional.`;
 }
 
 // Genera el resumen ejecutivo
